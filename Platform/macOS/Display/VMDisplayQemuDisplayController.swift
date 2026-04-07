@@ -402,9 +402,9 @@ extension VMDisplayQemuWindowController {
         item.title = NSLocalizedString("Querying USB devices...", comment: "VMQemuDisplayMetalWindowController")
         item.isEnabled = false
         menu.addItem(item)
-        DispatchQueue.global(qos: .userInitiated).async { [self] in
+        Task.detached(priority: .userInitiated) { [self] in
             let devices = primaryDisplayController.vmUsbManager?.usbDevices ?? []
-            DispatchQueue.main.async {
+            await MainActor.run {
                 self.updateUsbDevicesMenu(menu, devices: devices)
             }
         }
@@ -464,16 +464,14 @@ extension VMDisplayQemuWindowController {
             return
         }
         let device = allUsbDevices[menu.tag]
-        Task.detached {
-            self.withErrorAlert {
-                try await usbManager.connectUsbDevice(device)
-                await MainActor.run {
-                    self.primaryDisplayController.connectedUsbDevices.append(device)
-                }
+        withErrorAlert {
+            try await usbManager.connectUsbDevice(device)
+            await MainActor.run {
+                self.primaryDisplayController.connectedUsbDevices.append(device)
             }
         }
     }
-    
+
     @objc func disconnectUsbDevice(sender: AnyObject) {
         guard let menu = sender as? NSMenuItem else {
             logger.error("wrong sender for disconnectUsbDevice")
@@ -485,10 +483,8 @@ extension VMDisplayQemuWindowController {
         }
         let device = allUsbDevices[menu.tag]
         primaryDisplayController.connectedUsbDevices.removeAll(where: { $0 == device })
-        Task.detached {
-            self.withErrorAlert {
-                try await usbManager.disconnectUsbDevice(device)
-            }
+        withErrorAlert {
+            try await usbManager.disconnectUsbDevice(device)
         }
     }
 
