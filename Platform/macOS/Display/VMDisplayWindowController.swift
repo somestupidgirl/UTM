@@ -217,7 +217,7 @@ class VMDisplayWindowController: NSWindowController, UTMVirtualMachineDelegate {
     // MARK: - UI states
     
     override func windowDidLoad() {
-        window!.recalculateKeyViewLoop()
+        window?.recalculateKeyViewLoop()
         setupStopButtonMenu()
         setupMainMenu()
 
@@ -251,7 +251,7 @@ class VMDisplayWindowController: NSWindowController, UTMVirtualMachineDelegate {
         startPauseToolbarItem.label = pauseDescription
         startPauseMenuItem.title = pauseDescription
         setControl([.startPause, .power, .restart, .captureInput, .resize, .windows, .keyboardShortcut], isEnabled: true)
-        window!.makeFirstResponder(displayView.subviews.first)
+        window?.makeFirstResponder(displayView.subviews.first)
         if isPreventIdleSleep && !isSecondary {
             var preventIdleSleepAssertion: IOPMAssertionID = .zero
             let success = IOPMAssertionCreateWithName(kIOPMAssertPreventUserIdleSystemSleep as CFString,
@@ -283,7 +283,7 @@ class VMDisplayWindowController: NSWindowController, UTMVirtualMachineDelegate {
             setControl([.power, .restart], isEnabled: !stopped)
         }
         setControl([.captureInput, .resize, .drives, .sharedFolder, .usb, .windows, .keyboardShortcut], isEnabled: false)
-        window!.makeFirstResponder(nil)
+        window?.makeFirstResponder(nil)
         if let preventIdleSleepAssertion = preventIdleSleepAssertion {
             IOPMAssertionRelease(preventIdleSleepAssertion)
         }
@@ -293,24 +293,26 @@ class VMDisplayWindowController: NSWindowController, UTMVirtualMachineDelegate {
     
     @MainActor
     func showErrorAlert(_ message: String, completionHandler handler: ((NSApplication.ModalResponse) -> Void)? = nil) {
-        window?.resignKey()
+        guard let window = window else { return }
+        window.resignKey()
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = NSLocalizedString("Error", comment: "VMDisplayWindowController")
         alert.informativeText = message
-        alert.beginSheetModal(for: window!, completionHandler: handler)
+        alert.beginSheetModal(for: window, completionHandler: handler)
     }
-    
+
     @MainActor
     func showConfirmAlert(_ message: String, confirmHandler handler: (() -> Void)? = nil) {
-        window?.resignKey()
+        guard let window = window else { return }
+        window.resignKey()
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = NSLocalizedString("Confirmation", comment: "VMDisplayWindowController")
         alert.informativeText = message
         alert.addButton(withTitle: NSLocalizedString("OK", comment: "VMDisplayWindowController"))
         alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "VMDisplayWindowController"))
-        alert.beginSheetModal(for: window!) { response in
+        alert.beginSheetModal(for: window) { response in
             if response == .alertFirstButtonReturn {
                 handler?()
             }
@@ -592,7 +594,7 @@ extension VMDisplayWindowController {
         NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeMainNotification, object: window)
         NotificationCenter.default.removeObserver(self, name: NSWindow.didResignMainNotification, object: window)
         NotificationCenter.default.removeObserver(self, name: NSMenu.didRemoveItemNotification, object: NSApp.mainMenu)
-        if let mainMenu = NSApp.mainMenu, mainMenu.items.contains(mainMenuItem!) {
+        if let mainMenuItem = mainMenuItem, let mainMenu = NSApp.mainMenu, mainMenu.items.contains(mainMenuItem) {
             mainMenu.removeItem(mainMenuItem)
         }
     }

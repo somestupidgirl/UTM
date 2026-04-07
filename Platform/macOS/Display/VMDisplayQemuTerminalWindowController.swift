@@ -53,7 +53,9 @@ class VMDisplayQemuTerminalWindowController: VMDisplayQemuWindowController, VMDi
     override func enterLive() {
         super.enterLive()
         isSizeChangeIgnored = true
-        setupTerminal(terminalView, using: serialConfig!.terminal!, id: id, for: window!)
+        if let terminal = serialConfig?.terminal, let window = window {
+            setupTerminal(terminalView, using: terminal, id: id, for: window)
+        }
         isSizeChangeIgnored = false
         setControl(.keyboardShortcut, isEnabled: false)
     }
@@ -66,8 +68,11 @@ class VMDisplayQemuTerminalWindowController: VMDisplayQemuWindowController, VMDi
     }
     
     override func resizeConsoleButtonPressed(_ sender: Any) {
-        let cmd = resizeCommand(for: terminalView, using: serialConfig!.terminal!)
-        vmSerialPort?.write(cmd.data(using: .nonLossyASCII)!)
+        guard let terminal = serialConfig?.terminal else { return }
+        let cmd = resizeCommand(for: terminalView, using: terminal)
+        if let data = cmd.data(using: .nonLossyASCII) {
+            vmSerialPort?.write(data)
+        }
     }
     
     override func captureMouseButtonPressed(_ sender: Any) {
@@ -87,8 +92,8 @@ class VMDisplayQemuTerminalWindowController: VMDisplayQemuWindowController, VMDi
     override func spiceDidDestroySerial(_ serial: CSPort) {
         if vmSerialPort == serial {
             if isSecondary {
-                DispatchQueue.main.async {
-                    self.close()
+                DispatchQueue.main.async { [weak self] in
+                    self?.close()
                 }
             }
             serial.delegate = nil
@@ -107,7 +112,7 @@ extension VMDisplayQemuTerminalWindowController: TerminalViewDelegate {
     }
     
     func setTerminalTitle(source: TerminalView, title: String) {
-        window!.subtitle = title
+        window?.subtitle = title
     }
     
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {

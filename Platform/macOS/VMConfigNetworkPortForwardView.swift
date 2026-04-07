@@ -20,10 +20,15 @@ import SwiftUI
 struct VMConfigNetworkPortForwardView: View {
     @Binding var config: UTMQemuConfigurationNetwork
     @State private var isEditingNewPort = false
-    @State private var isEditingExistingPort = false
     @State private var selectedId: UUID?
     @State private var editPortForward: UTMQemuConfigurationPortForward?
-    
+
+    private func deleteSelected() {
+        guard let id = selectedId else { return }
+        config.portForward.removeAll { $0.id == id }
+        selectedId = nil
+    }
+
     var body: some View {
         VStack {
             Table(config.portForward, selection: $selectedId) {
@@ -42,22 +47,19 @@ struct VMConfigNetworkPortForwardView: View {
                 TableColumn("Host Port") { row in
                     Text(String(row.hostPort))
                 }
-            }.onDoubleClick {
-                editPortForward = config.portForward.first(where: { $0.id == selectedId })
             }
+            .onDeleteCommand(perform: deleteSelected)
             HStack {
                 Spacer()
-                if let selectedId = selectedId {
-                    Button("Delete") {
-                        config.portForward.removeAll(where: { $0.id == selectedId })
-                        self.selectedId = nil
-                    }
-                    Button("Edit…") {
-                        editPortForward = config.portForward.first(where: { $0.id == selectedId })
-                    }.popover(item: $editPortForward, arrowEdge: .top) { item in
-                        PortForwardEdit(config: $config, forward: item).padding()
-                            .frame(width: 250)
-                    }
+                Button("Delete", action: deleteSelected)
+                    .disabled(selectedId == nil)
+                Button("Edit…") {
+                    editPortForward = config.portForward.first { $0.id == selectedId }
+                }
+                .disabled(selectedId == nil)
+                .popover(item: $editPortForward, arrowEdge: .top) { item in
+                    PortForwardEdit(config: $config, forward: item).padding()
+                        .frame(width: 250)
                 }
                 Button("New…") {
                     isEditingNewPort.toggle()

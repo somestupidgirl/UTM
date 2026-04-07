@@ -42,11 +42,10 @@ class VMDisplayQemuWindowController: VMDisplayWindowController {
     }
 
     var primaryDisplayController: VMDisplayQemuWindowController {
-        if isSecondary {
-            return (primaryWindow as? VMDisplayQemuWindowController)!
-        } else {
-            return self
+        if isSecondary, let primary = primaryWindow as? VMDisplayQemuWindowController {
+            return primary
         }
+        return self
     }
 
     convenience init(vm: UTMQemuVirtualMachine, id: Int) {
@@ -61,8 +60,8 @@ class VMDisplayQemuWindowController: VMDisplayWindowController {
         setControl(.drives, isEnabled: vmQemuConfig.drives.count > 0)
         setControl(.sharedFolder, isEnabled: vmQemuConfig.sharing.directoryShareMode == .webdav) // virtfs cannot dynamically change
         setControl(.usb, isEnabled: qemuVM.hasUsbRedirection)
-        window!.title = defaultTitle
-        window!.subtitle = defaultSubtitle
+        window?.title = defaultTitle
+        window?.subtitle = defaultSubtitle
         super.enterLive()
     }
     
@@ -156,11 +155,12 @@ class VMDisplayQemuWindowController: VMDisplayWindowController {
     }
     
     func openDriveImage(forDriveIndex index: Int) {
+        guard let window = window else { return }
         let drive = vmQemuConfig.drives[index]
         let openPanel = NSOpenPanel()
         openPanel.title = NSLocalizedString("Select Drive Image", comment: "VMDisplayWindowController")
         openPanel.allowedContentTypes = [.data]
-        openPanel.beginSheetModal(for: window!) { response in
+        openPanel.beginSheetModal(for: window) { response in
             guard response == .OK else {
                 return
             }
@@ -205,11 +205,12 @@ class VMDisplayQemuWindowController: VMDisplayWindowController {
 
 extension VMDisplayQemuWindowController {
     @IBAction override func sharedFolderButtonPressed(_ sender: Any) {
+        guard let window = window else { return }
         let openPanel = NSOpenPanel()
         openPanel.title = NSLocalizedString("Select Shared Folder", comment: "VMDisplayWindowController")
         openPanel.canChooseDirectories = true
         openPanel.canChooseFiles = false
-        openPanel.beginSheetModal(for: window!) { response in
+        openPanel.beginSheetModal(for: window) { response in
             guard response == .OK else {
                 return
             }
@@ -248,13 +249,13 @@ extension VMDisplayQemuWindowController: UTMSpiceIODelegate {
     
     func spiceDidCreateInput(_ input: CSInput) {
         for subwindow in secondaryWindows {
-            (subwindow as! VMDisplayQemuWindowController).spiceDidCreateInput(input)
+            (subwindow as? VMDisplayQemuWindowController)?.spiceDidCreateInput(input)
         }
     }
     
     func spiceDidDestroyInput(_ input: CSInput) {
         for subwindow in secondaryWindows {
-            (subwindow as! VMDisplayQemuWindowController).spiceDidDestroyInput(input)
+            (subwindow as? VMDisplayQemuWindowController)?.spiceDidDestroyInput(input)
         }
     }
     
@@ -269,13 +270,13 @@ extension VMDisplayQemuWindowController: UTMSpiceIODelegate {
     
     func spiceDidUpdateDisplay(_ display: CSDisplay) {
         for subwindow in secondaryWindows {
-            (subwindow as! VMDisplayQemuWindowController).spiceDidUpdateDisplay(display)
+            (subwindow as? VMDisplayQemuWindowController)?.spiceDidUpdateDisplay(display)
         }
     }
     
     func spiceDidDestroyDisplay(_ display: CSDisplay) {
         for subwindow in secondaryWindows {
-            (subwindow as! VMDisplayQemuWindowController).spiceDidDestroyDisplay(display)
+            (subwindow as? VMDisplayQemuWindowController)?.spiceDidDestroyDisplay(display)
         }
     }
     
@@ -290,13 +291,13 @@ extension VMDisplayQemuWindowController: UTMSpiceIODelegate {
             }
         }
         for subwindow in secondaryWindows {
-            (subwindow as! VMDisplayQemuWindowController).spiceDidChangeUsbManager(usbManager)
+            (subwindow as? VMDisplayQemuWindowController)?.spiceDidChangeUsbManager(usbManager)
         }
     }
     
     func spiceDynamicResolutionSupportDidChange(_ supported: Bool) {
         for subwindow in secondaryWindows {
-            (subwindow as! VMDisplayQemuWindowController).spiceDynamicResolutionSupportDidChange(supported)
+            (subwindow as? VMDisplayQemuWindowController)?.spiceDynamicResolutionSupportDidChange(supported)
         }
     }
     
@@ -311,7 +312,7 @@ extension VMDisplayQemuWindowController: UTMSpiceIODelegate {
     
     func spiceDidDestroySerial(_ serial: CSPort) {
         for subwindow in secondaryWindows {
-            (subwindow as! VMDisplayQemuWindowController).spiceDidDestroySerial(serial)
+            (subwindow as? VMDisplayQemuWindowController)?.spiceDidDestroySerial(serial)
         }
     }
 }
@@ -330,7 +331,7 @@ extension VMDisplayQemuWindowController: CSUSBManagerDelegate {
         logger.debug("USB device attached: \(device)")
         if !isNoUsbPrompt {
             Task { @MainActor in
-                if self.window!.isKeyWindow && self.vm.state == .started {
+                if self.window?.isKeyWindow == true && self.vm.state == .started {
                     self.showConnectPrompt(for: device)
                 }
             }
@@ -356,7 +357,8 @@ extension VMDisplayQemuWindowController: CSUSBManagerDelegate {
         alert.showsSuppressionButton = true
         alert.addButton(withTitle: NSLocalizedString("Confirm", comment: "VMQemuDisplayMetalWindowController"))
         alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "VMQemuDisplayMetalWindowController"))
-        alert.beginSheetModal(for: window!) { response in
+        guard let window = window else { return }
+        alert.beginSheetModal(for: window) { response in
             if let suppressionButton = alert.suppressionButton,
                suppressionButton.state == .on {
                 self.isNoUsbPrompt = true
@@ -553,7 +555,7 @@ extension VMDisplayQemuWindowController {
             item.action = #selector(showWindowFromDisplay)
             menu.addItem(item)
         }
-        for serial in qemuVM.ioService!.serials {
+        for serial in qemuVM.ioService?.serials ?? [] {
             guard let id = configIdForSerial(serial) else {
                 continue
             }

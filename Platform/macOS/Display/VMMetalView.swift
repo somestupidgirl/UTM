@@ -189,8 +189,9 @@ class VMMetalView: MTKView {
         if event.modifierFlags.contains(.numericPad) {
             inputDelegate?.didUseNumericPad()
         }
-        lastKeyDown = getScanCodeForEvent(event)
-        inputDelegate?.keyDown(scanCode: lastKeyDown!)
+        let scanCode = getScanCodeForEvent(event)
+        lastKeyDown = scanCode
+        inputDelegate?.keyDown(scanCode: scanCode)
     }
     
     override func keyUp(with event: NSEvent) {
@@ -211,9 +212,9 @@ class VMMetalView: MTKView {
             }
             if captureKeyPressed {
                 if isMouseCaptured {
-                    inputDelegate!.releaseMouse()
+                    inputDelegate?.releaseMouse()
                 } else {
-                    inputDelegate!.captureMouse()
+                    inputDelegate?.captureMouse()
                 }
             }
         }

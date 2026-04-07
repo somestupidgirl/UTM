@@ -212,6 +212,7 @@ struct DisplaySettingsView: View {
     @AppStorage("QEMURendererBackend") var qemuRendererBackend: UTMQEMURendererBackend = .qemuRendererBackendDefault
     @AppStorage("QEMUVulkanDriver") var qemuVulkanDriver: UTMQEMUVulkanDriver = .qemuVulkanDriverDefault
     @AppStorage("QEMURendererFPSLimit") var qemuRendererFpsLimit: Int = 0
+    @AppStorage("QEMUShowFPSOverlay") var showFPSOverlay: Bool = false
 
     private var isVulkanSupported: Bool {
         qemuRendererBackend == .qemuRendererBackendDefault || qemuRendererBackend == .qemuRendererBackendAngleMetal
@@ -263,6 +264,9 @@ struct DisplaySettingsView: View {
                         .multilineTextAlignment(.trailing)
                         .help("If set, a frame limit can improve smoothness in rendering by preventing stutters when set to the lowest value your device can handle.")
                 }
+                Toggle(isOn: $showFPSOverlay) {
+                    Text("Show refresh rate overlay")
+                }.help("Displays the configured Metal preferred frame rate in the corner of each VM display window. Useful for verifying ProMotion/high-refresh-rate support.")
             }
         }
     }
@@ -532,6 +536,7 @@ extension UserDefaults {
     @objc dynamic var InvertScroll: Bool { false }
     @objc dynamic var QEMURendererBackend: Int { 0 }
     @objc dynamic var QEMURendererFPSLimit: Int { 0 }
+    @objc dynamic var QEMUShowFPSOverlay: Bool { false }
 }
 
 @available(macOS 11, *)
