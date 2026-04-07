@@ -146,7 +146,7 @@ struct VMDrivesSettingsView<Drive: UTMConfigurationDrive>: View {
     private func addNewDrive(_ newDrive: Drive) {
         newDrivePopover = false // hide popover
         data.busyWorkAsync {
-            DispatchQueue.main.async {
+            await MainActor.run {
                 drives.append(newDrive)
             }
         }

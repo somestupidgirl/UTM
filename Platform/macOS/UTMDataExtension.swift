@@ -56,19 +56,20 @@ extension UTMData {
         }
         if let unwrappedWindow = window as? VMDisplayWindowController {
             vmWindows[vm] = unwrappedWindow
-            vm.wrapped!.delegate = unwrappedWindow
+            vm.wrapped?.delegate = unwrappedWindow
             unwrappedWindow.showWindow(nil)
-            unwrappedWindow.window!.makeMain()
+            unwrappedWindow.window?.makeMain()
             if startImmediately {
                 unwrappedWindow.requestAutoStart(options: options)
             }
         } else if let unwrappedWindow = window as? VMHeadlessSessionState {
             vmWindows[vm] = unwrappedWindow
             if startImmediately {
-                if vm.wrapped!.state == .paused {
-                    vm.wrapped!.requestVmResume()
-                } else if vm.wrapped!.state == .stopped {
-                    vm.wrapped!.requestVmStart(options: options)
+                guard let wrapped = vm.wrapped else { return }
+                if wrapped.state == .paused {
+                    wrapped.requestVmResume()
+                } else if wrapped.state == .stopped {
+                    wrapped.requestVmStart(options: options)
                 }
             }
         } else {
