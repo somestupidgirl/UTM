@@ -64,6 +64,15 @@ class VMMetalView: MTKView {
     @Setting("IsCtrlCmdSwapped") private var isCtrlCmdSwapped = false
     @Setting("IsISOKeySwapped") private var isISOKeySwapped = false
 
+    /// Monotonically-increasing count of completed Metal draw calls (main-thread only).
+    /// Callers can snapshot this value at 1-second intervals to compute live FPS.
+    private(set) var renderFrameCount: Int = 0
+
+    override func draw() {
+        renderFrameCount += 1
+        super.draw()
+    }
+
     /// On ISO keyboards we have to switch `kVK_ISO_Section` and `kVK_ANSI_Grave`
     /// from: https://chromium.googlesource.com/chromium/src/+/lkgr/ui/events/keycodes/keyboard_code_conversion_mac.mm
     private func convertToCurrentLayout(for keycode: Int) -> Int {

@@ -98,7 +98,11 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
     private var isReadyToSaveResolution: Bool = false
 
     @Setting("FullScreenAutoCapture") private var isFullScreenAutoCapture: Bool = false
-    
+    @Setting("AppleShowFPSOverlay") private var showAppleFPSOverlay: Bool = false
+
+    private var fpsOverlayLabel: NSTextField?
+    private var settingsChangedToken: Any?
+
     override func windowDidLoad() {
         mainView = VZVirtualMachineView()
         captureMouseToolbarButton.image = captureMouseToolbarButton.alternateImage // show capture keyboard image
@@ -114,8 +118,28 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
                !supportsReconfiguration || !isDynamicResolution {
                 window.contentMinSize = contentMinSize(in: window, for: windowSize(for: primaryDisplay))
             }
+            self?.updateAppleFPSOverlay()
+        }
+        settingsChangedToken = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateAppleFPSOverlay()
         }
         super.windowDidLoad()
+
+        // Add FPS overlay label on top of the VM view (added after super sets up the view hierarchy)
+        let label = NSTextField(labelWithString: "")
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .white
+        label.backgroundColor = NSColor.black.withAlphaComponent(0.55)
+        label.isBezeled = false
+        label.isEditable = false
+        label.isHidden = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        appleView.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: appleView.topAnchor, constant: 4),
+            label.trailingAnchor.constraint(equalTo: appleView.trailingAnchor, constant: -4),
+        ])
+        fpsOverlayLabel = label
     }
 
     override func windowWillClose(_ notification: Notification) {
@@ -123,6 +147,10 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
             NotificationCenter.default.removeObserver(screenChangedToken)
         }
         screenChangedToken = nil
+        if let settingsChangedToken = settingsChangedToken {
+            NotificationCenter.default.removeObserver(settingsChangedToken)
+        }
+        settingsChangedToken = nil
         stopPollingForSupportsReconfiguration()
         super.windowWillClose(notification)
     }
@@ -135,20 +163,38 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
             appleView.automaticallyReconfiguresDisplay = isDynamicResolution
             startPollingForSupportsReconfiguration()
         }
+        updateAppleFPSOverlay()
         super.enterLive()
     }
-    
+
     override func enterSuspended(isBusy busy: Bool) {
         if !busy {
             appleView.virtualMachine = nil
             appleView.isHidden = true
             screenshotView.image = vm.screenshot?.image
             screenshotView.isHidden = false
+            fpsOverlayLabel?.isHidden = true
         }
         captureMouseToolbarButton.state = .off
         captureMouseButtonPressed(self)
         stopPollingForSupportsReconfiguration()
         super.enterSuspended(isBusy: busy)
+    }
+
+    private func updateAppleFPSOverlay() {
+        guard let label = fpsOverlayLabel else { return }
+        if showAppleFPSOverlay {
+            let hz: Int
+            if #available(macOS 12, *) {
+                hz = (window?.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 60
+            } else {
+                hz = 60
+            }
+            label.stringValue = " Display: \(hz) Hz "
+            label.isHidden = appleView.isHidden // only show while VM view is visible
+        } else {
+            label.isHidden = true
+        }
     }
     
     @available(macOS 12, *)

@@ -103,6 +103,8 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
     @Setting("QEMUShowFPSOverlay") private var showFPSOverlay: Bool = false
 
     private var fpsOverlayLabel: NSTextField?
+    private var fpsTimer: Timer?
+    private var fpsLastRenderCount: Int = 0
     
     // MARK: - Init
     
@@ -443,6 +445,7 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
         stopBackgroundRender()
         vmDisplay?.removeRenderer(renderer!)
         stopAllCapture()
+        stopFPSTimer()
         if let screenChangedToken = screenChangedToken {
             NotificationCenter.default.removeObserver(screenChangedToken)
         }
@@ -476,6 +479,7 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
         if let vmDisplay = vmDisplay {
             displaySizeDidChange(size: vmDisplay.displaySize)
         }
+        startFPSTimer()
         super.enterLive()
         setControl(.resize, isEnabled: false) // disable item
         if isWindowFocusAutoCapture {
@@ -489,6 +493,7 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
             metalView.isHidden = true
             screenshotView.image = vm.screenshot?.image
             screenshotView.isHidden = false
+            stopFPSTimer()
         }
         if vm.state == .stopped {
             vmDisplay = nil
@@ -623,6 +628,30 @@ extension VMDisplayQemuMetalWindowController {
         if let vmDisplay = self.vmDisplay {
             displaySizeDidChange(size: vmDisplay.displaySize)
         }
+    }
+
+    private func startFPSTimer() {
+        stopFPSTimer()
+        fpsLastRenderCount = metalView.renderFrameCount
+        fpsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let count = self.metalView.renderFrameCount
+            let fps = count - self.fpsLastRenderCount
+            self.fpsLastRenderCount = count
+            guard let label = self.fpsOverlayLabel else { return }
+            if self.showFPSOverlay {
+                label.stringValue = " FPS: \(fps) "
+                label.isHidden = false
+            } else {
+                label.isHidden = true
+            }
+        }
+    }
+
+    private func stopFPSTimer() {
+        fpsTimer?.invalidate()
+        fpsTimer = nil
+        fpsOverlayLabel?.isHidden = true
     }
 
     private func contentMinSize(in window: NSWindow, for displaySize: CGSize) -> CGSize {

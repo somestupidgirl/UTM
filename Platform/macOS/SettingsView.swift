@@ -213,6 +213,7 @@ struct DisplaySettingsView: View {
     @AppStorage("QEMUVulkanDriver") var qemuVulkanDriver: UTMQEMUVulkanDriver = .qemuVulkanDriverDefault
     @AppStorage("QEMURendererFPSLimit") var qemuRendererFpsLimit: Int = 0
     @AppStorage("QEMUShowFPSOverlay") var showFPSOverlay: Bool = false
+    @AppStorage("AppleShowFPSOverlay") var showAppleFPSOverlay: Bool = false
 
     private var isVulkanSupported: Bool {
         qemuRendererBackend == .qemuRendererBackendDefault || qemuRendererBackend == .qemuRendererBackendAngleMetal
@@ -258,15 +259,20 @@ struct DisplaySettingsView: View {
                     Text("The selected renderer backend does not support Vulkan.")
                 }
                 HStack {
-                    Stepper("FPS Limit", value: $qemuRendererFpsLimit, in: 0...240, step: 15)
+                    Stepper("Frame Rate Limit", value: $qemuRendererFpsLimit, in: 0...240, step: 15)
                     NumberTextField("", number: $qemuRendererFpsLimit, prompt: "None")
                         .frame(width: 80)
                         .multilineTextAlignment(.trailing)
-                        .help("If set, a frame limit can improve smoothness in rendering by preventing stutters when set to the lowest value your device can handle.")
+                        .help("Caps the Metal render loop to this many frames per second (0 = no cap). Useful for reducing GPU load or improving smoothness at a known-good rate. This sets the maximum — actual FPS may be lower.")
                 }
                 Toggle(isOn: $showFPSOverlay) {
-                    Text("Show refresh rate overlay")
-                }.help("Displays the configured Metal preferred frame rate in the corner of each VM display window. Useful for verifying ProMotion/high-refresh-rate support.")
+                    Text("Show live FPS counter (QEMU VMs)")
+                }.help("Overlays a live frames-per-second counter in the corner of each QEMU display window, measured from actual Metal draw calls. Useful for checking rendering performance.")
+            }
+            Section(header: Text("Apple Virtualization Display")) {
+                Toggle(isOn: $showAppleFPSOverlay) {
+                    Text("Show display refresh rate (Apple VMs)")
+                }.help("Overlays the host display's current refresh rate (e.g. 60 Hz or 120 Hz) in the corner of Apple Virtualization VM windows. Useful for verifying ProMotion/high-refresh-rate support. Note: this reflects the host display rate, not the guest render rate, since Apple Virtualization does not expose a frame delivery API.")
             }
         }
     }
@@ -537,6 +543,7 @@ extension UserDefaults {
     @objc dynamic var QEMURendererBackend: Int { 0 }
     @objc dynamic var QEMURendererFPSLimit: Int { 0 }
     @objc dynamic var QEMUShowFPSOverlay: Bool { false }
+    @objc dynamic var AppleShowFPSOverlay: Bool { false }
 }
 
 @available(macOS 11, *)
