@@ -456,9 +456,10 @@ class VMRemoteData: VMData {
         self.existingWrapped = existingWrapped
         super.init()
         self.isTakeoverAllowed = item.isTakeoverAllowed
-        self.registryEntryWrapped = UTMRegistry.shared.entry(uuid: item.id, name: item.name, path: item.path)
-        self.registryEntryWrapped!.isSuspended = item.isSuspended
-        self.registryEntryWrapped!.externalDrives = item.mountedDrives.mapValues({ UTMRegistryEntry.File(dummyFromPath: $0) })
+        let registryEntry = UTMRegistry.shared.entry(uuid: item.id, name: item.name, path: item.path)
+        self.registryEntryWrapped = registryEntry
+        registryEntry.isSuspended = item.isSuspended
+        registryEntry.externalDrives = item.mountedDrives.mapValues({ UTMRegistryEntry.File(dummyFromPath: $0) })
     }
 
     override func load() throws {
@@ -469,7 +470,9 @@ class VMRemoteData: VMData {
         guard backend == .qemu else {
             throw VMRemoteDataError.backendNotSupported
         }
-        let entry = registryEntryWrapped!
+        guard let entry = registryEntryWrapped else {
+            throw VMRemoteDataError.notImplemented
+        }
         let config = try await server.getQEMUConfiguration(for: entry.uuid)
         await loadCustomIcon(withRemoteServer: server, id: entry.uuid, config: config)
         let vm: UTMRemoteSpiceVirtualMachine

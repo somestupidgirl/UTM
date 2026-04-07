@@ -60,9 +60,9 @@ struct VMToolbarOrnamentModifier: ViewModifier {
                 }
                 .disabled(state.isBusy)
                 Divider()
-                if case .serial(_, _) = state.device {
+                if case .serial(_, let idx) = state.device {
                     Button {
-                        let template = session.qemuConfig.serials[state.device!.configIndex].terminal?.resizeCommand
+                        let template = session.qemuConfig.serials[idx].terminal?.resizeCommand
                         state.toggleDisplayResize(command: template)
                     } label: {
                         Label("Zoom", systemImage: state.isViewportChanged ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")

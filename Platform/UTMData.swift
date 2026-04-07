@@ -958,9 +958,12 @@ enum AlertItem: Identifiable {
 
     @available(macOS 14, *)
     func resizeAppleDrive(for driveUrl: URL, sizeInMib: Int) throws {
+        guard let asif = UTMASIFImage.sharedInstance() else {
+            throw UTMDataError.unsupportedBackend
+        }
         let bytesinMib = 1048576
         let size = Int(sizeInMib * bytesinMib)
-        try UTMASIFImage.sharedInstance()!.resize(with: driveUrl, size: size)
+        try asif.resize(with: driveUrl, size: size)
     }
     #endif
     
