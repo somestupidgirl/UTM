@@ -136,7 +136,9 @@ extension VMWindowState {
             .replacingOccurrences(of: "$COLS", with: String(cols))
             .replacingOccurrences(of: "$ROWS", with: String(rows))
             .replacingOccurrences(of: "\\n", with: "\n")
-        serial.write(cmd.data(using: .nonLossyASCII)!)
+        if let data = cmd.data(using: .nonLossyASCII) {
+            serial.write(data)
+        }
     }
     
     mutating func toggleDisplayResize(command: String? = nil) {

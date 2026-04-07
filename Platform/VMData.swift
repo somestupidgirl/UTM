@@ -323,7 +323,7 @@ extension VMData {
         state == .starting ||
         state == .stopping ||
         state == .saving ||
-        state == .resuming
+        state == .restoring
     }
     
     /// VM has been suspended before

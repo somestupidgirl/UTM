@@ -241,10 +241,10 @@ extension VMDisplayQemuWindowController {
 extension VMDisplayQemuWindowController: UTMSpiceIODelegate {
     private func configIdForSerial(_ serial: CSPort) -> Int? {
         let prefix = "com.utmapp.terminal."
-        guard serial.name?.hasPrefix(prefix) ?? false else {
+        guard let name = serial.name, name.hasPrefix(prefix) else {
             return nil
         }
-        return Int(serial.name!.dropFirst(prefix.count))
+        return Int(name.dropFirst(prefix.count))
     }
     
     func spiceDidCreateInput(_ input: CSInput) {

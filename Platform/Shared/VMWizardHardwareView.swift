@@ -307,13 +307,14 @@ struct VMWizardHardwareView: View {
                 wizardState.systemTarget = wizardState.systemArchitecture.targetType.default
                 wizardState.legacyHardware = false
             } else if selectedMachine == nil {
-                selectedMachine = SupportedMachine.default(for: wizardState.operatingSystem)
-                wizardState.systemArchitecture = selectedMachine!.architecture
-                wizardState.systemTarget = selectedMachine!.target
-                wizardState.systemMemoryMib = selectedMachine!.defaultRam
-                wizardState.systemCpuCount = selectedMachine!.maxSupportedCores
-                wizardState.storageSizeGib = selectedMachine!.defaultStorageGiB
-                wizardState.legacyHardware = selectedMachine!.isLegacyHardware
+                let machine = SupportedMachine.default(for: wizardState.operatingSystem)
+                selectedMachine = machine
+                wizardState.systemArchitecture = machine.architecture
+                wizardState.systemTarget = machine.target
+                wizardState.systemMemoryMib = machine.defaultRam
+                wizardState.systemCpuCount = machine.maxSupportedCores
+                wizardState.storageSizeGib = machine.defaultStorageGiB
+                wizardState.legacyHardware = machine.isLegacyHardware
             }
         }
     }

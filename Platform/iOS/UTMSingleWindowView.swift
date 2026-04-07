@@ -40,13 +40,13 @@ struct UTMSingleWindowView: View {
     
     var body: some View {
         ZStack {
-            if let session = session {
-                VMWindowView(id: identifier!, isInteractive: isInteractive).environmentObject(session)
-            } else if isInteractive {
+            if let session = session, let identifier = identifier {
+                VMWindowView(id: identifier, isInteractive: isInteractive).environmentObject(session)
+            } else if let data = data {
                 #if WITH_REMOTE
-                RemoteContentView(remoteClientState: data!.remoteClient.state).environmentObject(data!)
+                RemoteContentView(remoteClientState: data.remoteClient.state).environmentObject(data)
                 #else
-                ContentView().environmentObject(data!)
+                ContentView().environmentObject(data)
                 #endif
             } else {
                 VStack {
@@ -63,14 +63,14 @@ struct UTMSingleWindowView: View {
             }
         }
         .onReceive(vmSessionCreatedNotification) { output in
-            let newSession = output.userInfo!["Session"] as! VMSessionState
+            guard let newSession = output.userInfo?["Session"] as? VMSessionState else { return }
             withAnimation {
                 session = newSession
                 identifier = newSession.newWindow().windowID
             }
         }
         .onReceive(vmSessionEndedNotification) { output in
-            let endedSession = output.userInfo!["Session"] as! VMSessionState
+            guard let endedSession = output.userInfo?["Session"] as? VMSessionState else { return }
             if endedSession == session {
                 withAnimation {
                     session = nil

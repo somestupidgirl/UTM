@@ -178,7 +178,7 @@ enum AlertItem: Identifiable {
                             // we have a stale VM with the same UUID, so we replace that entry with this one
                             list[index] = vm
                             // update the registry with the new bookmark
-                            try? await vm.wrapped!.updateRegistryFromConfig()
+                            try? await vm.wrapped?.updateRegistryFromConfig()
                             continue
                         } else {
                             // duplicate is not stale so we need a new UUID
@@ -522,19 +522,16 @@ enum AlertItem: Identifiable {
         guard let newVM = try? VMData(url: newPath) else {
             throw UTMDataError.cloneFailed
         }
-        newVM.wrapped!.changeUuid(to: UUID(), name: newName, copyingEntry: nil)
+        newVM.wrapped?.changeUuid(to: UUID(), name: newName, copyingEntry: nil)
         if isRegenerateMACOnClone {
-            if let config = newVM.wrapped!.config as? UTMQemuConfiguration {
+            if let config = newVM.wrapped?.config as? UTMQemuConfiguration {
                 for i in config.networks.indices {
                     config.networks[i].macAddress = UTMQemuConfigurationNetwork.randomMacAddress()
                 }
             }
         }
         try await newVM.save()
-        var index = virtualMachines.firstIndex(of: vm)
-        if index != nil {
-            index! += 1
-        }
+        var index = virtualMachines.firstIndex(of: vm).map { $0 + 1 }
         listAdd(vm: newVM, at: index)
         listSelect(vm: newVM)
         return newVM
@@ -561,8 +558,8 @@ enum AlertItem: Identifiable {
         guard let newVM = try? VMData(url: url) else {
             throw UTMDataError.shortcutCreationFailed
         }
-        try await newVM.wrapped!.updateRegistryFromConfig()
-        
+        try await newVM.wrapped?.updateRegistryFromConfig()
+
         let oldSelected = selectedVM
         let index = try await delete(vm: vm, alsoRegistry: false)
         listAdd(vm: newVM, at: index)
