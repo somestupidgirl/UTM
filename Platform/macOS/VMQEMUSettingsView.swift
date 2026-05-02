@@ -41,22 +41,13 @@ struct VMQEMUSettingsView: View {
             }
         }
         NavigationLink {
-            VMConfigQEMUView(config: $config.qemu, system: $config.system, fetchFixedArguments: {
-                config.generatedArguments
+            VMConfigQEMUView(config: $config.qemu, system: $config.system, fetchArgumentGroups: {
+                config.groupedGeneratedArguments
             })
             .scrollable()
             .settingsToolbar()
         } label: {
             Label("QEMU", systemImage: "shippingbox")
-        }
-        if #available(macOS 12, *) {
-            NavigationLink {
-                VMConfigQEMUArgumentsView(config: $config.qemu, architecture: config.system.architecture, fixedArguments: config.generatedArguments)
-                    .settingsToolbar()
-            } label: {
-                Label("Arguments", systemImage: "character.textbox")
-                    .padding(.leading)
-            }
         }
         NavigationLink {
             VMConfigInputView(config: $config.input, hasUsbSupport: config.system.architecture.hasUsbSupport)

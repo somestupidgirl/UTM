@@ -147,6 +147,28 @@ import Virtualization // for getting network interfaces
         miscArguments
     }
 
+    /// Generated arguments grouped by category for display purposes.
+    var groupedGeneratedArguments: [QEMUArgumentGroup] {
+        var groups: [QEMUArgumentGroup] = []
+        groups.append(.init(name: "General", icon: "gearshape", arguments: [QEMUArgument("-L"), QEMUArgument(resourceURL.path), QEMUArgument(""), QEMUArgument("-S")]))
+        groups.append(.init(name: "SPICE", icon: "display", arguments: spiceArguments))
+        groups.append(.init(name: "Network", icon: "network", arguments: networkArguments))
+        groups.append(.init(name: "Display", icon: "rectangle.on.rectangle", arguments: displayArguments))
+        groups.append(.init(name: "Serial", icon: "rectangle.connected.to.line.below", arguments: serialArguments))
+        groups.append(.init(name: "CPU", icon: "cpu", arguments: cpuArguments))
+        groups.append(.init(name: "Machine", icon: "desktopcomputer", arguments: machineArguments))
+        groups.append(.init(name: "Architecture", icon: "chip", arguments: architectureArguments))
+        groups.append(.init(name: "Sound", icon: "speaker.wave.2", arguments: soundArguments))
+        if isUsbUsed {
+            groups.append(.init(name: "USB", icon: "usb", arguments: usbArguments))
+        }
+        groups.append(.init(name: "Input", icon: "keyboard", arguments: otherInputsArguments))
+        groups.append(.init(name: "Drives", icon: "internaldrive", arguments: drivesArguments))
+        groups.append(.init(name: "Sharing", icon: "folder", arguments: sharingArguments))
+        groups.append(.init(name: "Misc", icon: "ellipsis", arguments: miscArguments))
+        return groups.filter { !$0.arguments.isEmpty }
+    }
+
     /// Take user arguments and replace any quotes
     private var parsedUserArguments: [String] {
         var list = [String]()

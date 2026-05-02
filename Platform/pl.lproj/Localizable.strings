@@ -483,7 +483,7 @@
 /* VMSessionState.swift */
 "Connection to the server was lost." = "Połączenie z serwerem zostało utracone.";
 
-/* VMConfigQEMUArgumentsView.swift */
+/* VMConfigQEMUArgumentsGroupedView.swift */
 "Arguments" = "Parametry";
 "Export QEMU Command…" = "Eksportuj komendę QEMU...";
 "Export all arguments as a text file. This is only for debugging purposes as UTM's built-in QEMU differs from upstream QEMU in supported arguments." = "Eksportuj wszystkie argumenty do pliku tekstowego. Jest to tylko dla potrzeb debugowania z uwagi, że wbudowany do UTM, QEMU różni się od głównej wersji QEMU we wspieranych parametrach.";

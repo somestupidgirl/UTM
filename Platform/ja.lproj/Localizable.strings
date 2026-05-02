@@ -502,7 +502,7 @@
 "Background task is about to expire" = "バックグラウンドタスクがまもなく期限切れになります";
 "Switch back to UTM to avoid termination." = "終了を防ぐには、UTMに戻ってください。";
 
-// VMConfigQEMUArgumentsView.swift
+// VMConfigQEMUArgumentsGroupedView.swift
 "Arguments" = "引数";
 "Export QEMU Command…" = "QEMUコマンドを書き出す…";
 "Export all arguments as a text file. This is only for debugging purposes as UTM's built-in QEMU differs from upstream QEMU in supported arguments." = "すべての引数をテキストファイルとして書き出します。UTMの内蔵QEMUは、対応している引数がアップストリームのQEMUのものと異なるため、この機能はデバッグの目的でのみ使用します。";

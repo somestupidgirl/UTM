@@ -47,6 +47,44 @@ struct QEMUArgument: Hashable, Identifiable, Codable {
     }
 }
 
+struct QEMUArgumentGroup: Identifiable {
+    let id: String
+    let name: String
+    let icon: String
+    let arguments: [QEMUArgument]
+
+    init(name: String, icon: String, arguments: [QEMUArgument]) {
+        self.id = name
+        self.name = name
+        self.icon = icon
+        self.arguments = arguments
+    }
+
+    /// Format arguments as a readable command-line string, combining flags with their values.
+    var formattedArguments: String {
+        var lines: [String] = []
+        var currentLine = ""
+        for arg in arguments {
+            if arg.string.hasPrefix("-") {
+                if !currentLine.isEmpty {
+                    lines.append(currentLine)
+                }
+                currentLine = arg.string
+            } else {
+                if currentLine.isEmpty {
+                    currentLine = arg.string
+                } else {
+                    currentLine += " " + arg.string
+                }
+            }
+        }
+        if !currentLine.isEmpty {
+            lines.append(currentLine)
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 struct QEMUArgumentFragment: Hashable {
     /// String representing this fragment
     var string: String
