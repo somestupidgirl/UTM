@@ -33,6 +33,7 @@ struct VMWizardOSView: View {
                     }
                 }
                 #endif
+                #if !WITH_QEMU_HV
                 if !wizardState.useVirtualization {
                     Button {
                         wizardState.operatingSystem = .ClassicMacOS
@@ -43,6 +44,7 @@ struct VMWizardOSView: View {
                         OperatingSystem(imageName: "Logo-macOS", name: "Classic Mac OS")
                     }
                 }
+                #endif
                 Button {
                     wizardState.operatingSystem = .Windows
                     wizardState.useAppleVirtualization = false
