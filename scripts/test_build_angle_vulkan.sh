@@ -11,22 +11,6 @@ mkdir -p "$PREFIX/lib/vulkan"
 GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
-# Download WebKit
-WEBKIT_REPO="https://github.com/utmapp/WebKit.git"
-WEBKIT_COMMIT="ed78ab6e1a37f4f11583a0bd038f22ec91f3ff10"
-WEBKIT_SUBDIRS="Source/ThirdParty/ANGLE Configurations Tools/ccache"
-
-cd "$BUILD_DIR"
-if [ ! -d "WebKit.git" ]; then
-    echo -e "${GREEN}Cloning WebKit...${NC}"
-    git clone --filter=tree:0 --no-checkout "$WEBKIT_REPO" WebKit.git
-    cd WebKit.git
-    git sparse-checkout init
-    git sparse-checkout set $WEBKIT_SUBDIRS
-    git checkout "$WEBKIT_COMMIT"
-    cd ..
-fi
-
 # Download depot_tools
 if [ ! -d "depot_tools.git" ]; then
     echo -e "${GREEN}Cloning depot_tools...${NC}"
@@ -34,11 +18,18 @@ if [ ! -d "depot_tools.git" ]; then
 fi
 export PATH="$(realpath depot_tools.git):$PATH"
 
-# Build ANGLE Vulkan
-cd WebKit.git/Source/ThirdParty/ANGLE
-echo -e "${GREEN}Bootstrapping ANGLE for Vulkan (gclient sync)...${NC}"
-python3 scripts/bootstrap.py
-gclient sync
+# Download and Build ANGLE Vulkan
+cd "$BUILD_DIR"
+if [ ! -d "angle" ]; then
+    echo -e "${GREEN}Fetching upstream ANGLE (gclient sync)...${NC}"
+    mkdir angle
+    cd angle
+    fetch angle
+else
+    echo -e "${GREEN}Syncing upstream ANGLE...${NC}"
+    cd angle
+    gclient sync
+fi
 
 echo -e "${GREEN}Configuring ANGLE (Vulkan)...${NC}"
 gn gen out/Release --args='target_os="ios" target_cpu="arm64" is_debug=false angle_enable_vulkan=true angle_enable_metal=false angle_enable_gl=false'
