@@ -50,6 +50,9 @@ static int startQemu(UTMProcess *process, int argc, const char *argv[], const ch
         case kQEMURendererBackendAngleMetal:
             self.mutableEnvironment[@"ANGLE_DEFAULT_PLATFORM"] = @"metal";
             break;
+        case kQEMURendererBackendAngleVulkan:
+            self.mutableEnvironment[@"ANGLE_DEFAULT_PLATFORM"] = @"vulkan";
+            break;
         case kQEMURendererBackendAngleGL:
         default:
             [self.mutableEnvironment removeObjectForKey:@"ANGLE_DEFAULT_PLATFORM"];

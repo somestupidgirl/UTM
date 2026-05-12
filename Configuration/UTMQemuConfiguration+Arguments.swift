@@ -346,7 +346,7 @@ import Virtualization // for getting network interfaces
 
     private var isVulkanSupported: Bool {
         isGLSupported &&
-        (rendererBackend == .qemuRendererBackendAngleMetal || rendererBackend == .qemuRendererBackendDefault) &&
+        (rendererBackend == .qemuRendererBackendAngleMetal || rendererBackend == .qemuRendererBackendDefault || rendererBackend == .qemuRendererBackendAngleVulkan) &&
         vulkanDriver != .qemuVulkanDriverDisabled
     }
 
