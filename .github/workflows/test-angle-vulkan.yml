@@ -1,0 +1,36 @@
+name: Test ANGLE Vulkan Build
+on:
+  workflow_dispatch:
+
+env:
+  BUILD_XCODE_PATH: /Applications/Xcode_16.2.app
+  RUNNER_IMAGE: macos-14
+
+jobs:
+  build-angle-vulkan:
+    name: Build ANGLE Vulkan
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Xcode
+        shell: bash
+        run: |
+          [[ "$(xcode-select -p)" == "${{ env.BUILD_XCODE_PATH }}"* ]] || sudo xcode-select -s "${{ env.BUILD_XCODE_PATH }}"
+      - name: Install Python requirements
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip setuptools
+          pip install six pyparsing
+      - name: Build ANGLE (Vulkan)
+        run: |
+          source venv/bin/activate
+          ./scripts/test_build_angle_vulkan.sh
+      - name: Compress Output
+        run: tar -acf angle-vulkan.tgz sysroot/lib/vulkan
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ANGLE-Vulkan-ios-arm64
+          path: angle-vulkan.tgz
