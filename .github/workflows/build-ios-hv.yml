@@ -74,7 +74,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson cmake
-          brew install llvm spirv-llvm-translator libxcb libxrandr libclc
+          brew install llvm spirv-llvm-translator libxcb libxrandr libclc spirv-tools
           python3 -m pip install --break-system-packages six pyparsing pyyaml setuptools distlib mako
           python3 -c "import six; print('six OK:', six.__file__)"
           rm -f /usr/local/lib/pkgconfig/*.pc

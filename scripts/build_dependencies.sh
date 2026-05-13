@@ -790,8 +790,9 @@ build_mesa_host () {
     LLVM_PREFIX="$(brew --prefix llvm)"
     SPIRV_PREFIX="$(brew --prefix spirv-llvm-translator)"
     LIBCLC_PREFIX="$(brew --prefix libclc)"
+    SPIRV_TOOLS_PREFIX="$(brew --prefix spirv-tools)"
     HOST_PATH="$LLVM_PREFIX/bin:$CLEAN_PATH"
-    HOST_PKG_CONFIG_PATH="$LLVM_PREFIX/lib/pkgconfig:$SPIRV_PREFIX/lib/pkgconfig:$LIBCLC_PREFIX/share/pkgconfig:$LIBCLC_PREFIX/lib/pkgconfig"
+    HOST_PKG_CONFIG_PATH="$LLVM_PREFIX/lib/pkgconfig:$SPIRV_PREFIX/lib/pkgconfig:$LIBCLC_PREFIX/share/pkgconfig:$LIBCLC_PREFIX/lib/pkgconfig:$SPIRV_TOOLS_PREFIX/lib/pkgconfig"
     env -i PATH="$HOST_PATH" PKG_CONFIG_PATH="$HOST_PKG_CONFIG_PATH" HOME="$HOME" \
         meson host_build --prefix="$PREFIX/host" --buildtype=release \
         -Dllvm=enabled -Dstrip=true -Dopengl=false -Dgallium-drivers= -Dvulkan-drivers= -Dmesa-clc=enabled -Dinstall-mesa-clc=true
