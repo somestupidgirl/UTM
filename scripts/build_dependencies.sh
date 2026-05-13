@@ -787,6 +787,10 @@ build_moltenvk() {
 build_mesa_host () {
     pushd "$BUILD_DIR/mesa.git"
 
+    # Patch for LLVM 22+ compatibility
+    sed -i '' 's/Driver::GetResourcesPath/clang::GetResourcesPath/g' src/compiler/clc/clc_helpers.cpp || true
+    sed -i '' 's/#include <clang\//\n#undef UNUSED\n#include <clang\//g' src/compiler/clc/clc_helpers.cpp || true
+
     LLVM_PREFIX="$(brew --prefix llvm)"
     SPIRV_PREFIX="$(brew --prefix spirv-llvm-translator)"
     LIBCLC_PREFIX="$(brew --prefix libclc)"
