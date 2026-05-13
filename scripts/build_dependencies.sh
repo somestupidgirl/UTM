@@ -790,6 +790,7 @@ build_mesa_host () {
     # Patch for LLVM 22+ compatibility
     sed -i '' 's/Driver::GetResourcesPath/clang::GetResourcesPath/g' src/compiler/clc/clc_helpers.cpp || true
     sed -i '' 's/#include <clang\//\n#undef UNUSED\n#include <clang\//g' src/compiler/clc/clc_helpers.cpp || true
+    awk '/^#include/ { last_include = NR } { lines[NR] = $0 } END { for (i = 1; i <= NR; i++) { print lines[i]; if (i == last_include) print "#define UNUSED __attribute__((unused))" } }' src/compiler/clc/clc_helpers.cpp > tmp.cpp && mv tmp.cpp src/compiler/clc/clc_helpers.cpp
 
     LLVM_PREFIX="$(brew --prefix llvm)"
     SPIRV_PREFIX="$(brew --prefix spirv-llvm-translator)"
