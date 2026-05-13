@@ -78,7 +78,7 @@ struct VMConfigQEMUArgumentsGroupedView: View {
                     }
                 }
             }
-            Section(header: Text("Custom Arguments")) {
+            Section {
                 if #available(iOS 16, macOS 13, *) {
                     TextEditor(text: $customArgsText)
                         .font(.system(.caption, design: .monospaced))
@@ -99,6 +99,8 @@ struct VMConfigQEMUArgumentsGroupedView: View {
                             syncTextToConfig(newValue)
                         }
                 }
+            } header: {
+                Text("Custom Arguments")
             } footer: {
                 Text("One argument per line. Each line is passed as a separate argument to QEMU.")
                     .font(.caption2)
