@@ -122,7 +122,22 @@ jobs:
         shell: bash
         run: |
           [[ "$(xcode-select -p)" == "${{ env.BUILD_XCODE_PATH }}"* ]] || sudo xcode-select -s "${{ env.BUILD_XCODE_PATH }}"
-          xcodebuild -downloadPlatform iOS
+          # Restart CoreSimulator service to avoid "Unable to connect to simulator" errors
+          sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+          sleep 3
+          # Download iOS platform with retry
+          for i in 1 2 3; do
+            echo "Attempt $i: downloading iOS platform..."
+            if xcodebuild -downloadPlatform iOS; then
+              echo "iOS platform download succeeded."
+              break
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+            sleep 10
+          done
+          # Verify iphoneos SDK is available (required for device build)
+          xcodebuild -showsdks | grep iphoneos
       - name: Build UTM
         run: |
           ./scripts/build_utm.sh -k iphoneos -s iOS -a arm64 -o UTM
