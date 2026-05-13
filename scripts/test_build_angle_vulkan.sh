@@ -32,7 +32,7 @@ else
 fi
 
 echo -e "${GREEN}Configuring ANGLE (Vulkan)...${NC}"
-gn gen out/Release --args='target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false is_debug=false angle_enable_vulkan=true angle_enable_swiftshader=false angle_enable_metal=false angle_enable_gl=false'
+gn gen out/Release --args='target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false is_debug=false angle_enable_vulkan=true angle_shared_libvulkan=true angle_enable_swiftshader=false angle_enable_metal=false angle_enable_gl=false'
 
 echo -e "${GREEN}Building ANGLE (Vulkan)...${NC}"
 ninja -C out/Release libGLESv2 libEGL
