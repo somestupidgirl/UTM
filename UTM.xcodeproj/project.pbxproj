@@ -941,6 +941,7 @@
 		AABB00030000000300AA0003 /* VMConfigQEMUArgumentsGroupedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB00020000000200AA0002 /* VMConfigQEMUArgumentsGroupedView.swift */; };
 		AABB00040000000400AA0004 /* VMConfigQEMUArgumentsGroupedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB00020000000200AA0002 /* VMConfigQEMUArgumentsGroupedView.swift */; };
 		AABB00050000000500AA0005 /* VMConfigQEMUArgumentsGroupedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB00020000000200AA0002 /* VMConfigQEMUArgumentsGroupedView.swift */; };
+		AABB00060000000600AA0006 /* VMConfigQEMUArgumentsGroupedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB00020000000200AA0002 /* VMConfigQEMUArgumentsGroupedView.swift */; };
 		CEC1B00B2BBB211C0088119D /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CEC1B00A2BBB211C0088119D /* PrivacyInfo.xcprivacy */; };
 		CEC1B00C2BBB211C0088119D /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CEC1B00A2BBB211C0088119D /* PrivacyInfo.xcprivacy */; };
 		CEC1B00D2BBB211C0088119D /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CEC1B00A2BBB211C0088119D /* PrivacyInfo.xcprivacy */; };
@@ -3723,6 +3724,7 @@
 				CEF0306426A2AFDF00667B63 /* VMWizardOSLinuxView.swift in Sources */,
 				CEBE820B26A4C8E0007AAB12 /* VMWizardSummaryView.swift in Sources */,
 				CE2D955B24AD4F980059923A /* VMConfigQEMUView.swift in Sources */,
+				AABB00060000000600AA0006 /* VMConfigQEMUArgumentsGroupedView.swift in Sources */,
 				CE2D92A024AD46670059923A /* VMDisplayMetalViewController+Touch.m in Sources */,
 				CE2D92A124AD46670059923A /* UTMLegacyQemuConfiguration+Display.m in Sources */,
 				CEF0304E26A2AFBE00667B63 /* BigButtonStyle.swift in Sources */,
