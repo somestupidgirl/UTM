@@ -216,7 +216,11 @@ extension UTMRemoteClient {
 
         @Published var savedServers: [SavedServer] {
             didSet {
-                UserDefaults.standard.setValue(try! savedServers.propertyList(), forKey: "TrustedServers")
+                do {
+                    UserDefaults.standard.setValue(try savedServers.propertyList(), forKey: "TrustedServers")
+                } catch {
+                    logger.error("Failed to persist TrustedServers: \(error.localizedDescription)")
+                }
             }
         }
 
