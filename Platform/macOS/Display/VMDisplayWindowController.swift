@@ -234,12 +234,10 @@ class VMDisplayWindowController: NSWindowController, UTMVirtualMachineDelegate {
         guard shouldAutoStartVM else {
             return
         }
-        DispatchQueue.global(qos: .userInitiated).async {
-            if (self.vm.state == .stopped) {
-                self.vm.requestVmStart(options: options)
-            } else if (self.vm.state == .paused) {
-                self.vm.requestVmResume()
-            }
+        if vm.state == .stopped {
+            vm.requestVmStart(options: options)
+        } else if vm.state == .paused {
+            vm.requestVmResume()
         }
     }
     
