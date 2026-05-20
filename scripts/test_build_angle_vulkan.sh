@@ -36,7 +36,7 @@ echo -e "${GREEN}Configuring ANGLE (Vulkan)...${NC}"
 sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/settings.c || true
 sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/loader.c || true
 
-gn gen out/Release --args='target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false is_debug=false angle_enable_vulkan=true angle_shared_libvulkan=true angle_enable_swiftshader=false angle_enable_metal=false angle_enable_gl=false angle_enable_vulkan_validation_layers=false angle_build_tests=false angle_enable_dawn=false'
+gn gen out/Release --args='target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false is_debug=false angle_enable_vulkan=true angle_shared_libvulkan=false angle_enable_swiftshader=false angle_enable_metal=false angle_enable_gl=false angle_enable_vulkan_validation_layers=false angle_build_tests=false angle_enable_dawn=false'
 
 echo -e "${GREEN}Building ANGLE (Vulkan)...${NC}"
 ninja -C out/Release libGLESv2 libEGL
