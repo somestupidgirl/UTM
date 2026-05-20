@@ -32,11 +32,14 @@ else
 fi
 
 echo -e "${GREEN}Configuring ANGLE (Vulkan)...${NC}"
-# Patch vulkan-loader for iOS
+# Patch vulkan-loader for iOS: add missing macro definitions
 sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/settings.c || true
 sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/loader.c || true
 
-gn gen out/Release --args='target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false is_debug=false angle_enable_vulkan=true angle_shared_libvulkan=false angle_enable_swiftshader=false angle_enable_metal=false angle_enable_gl=false angle_enable_vulkan_validation_layers=false angle_build_tests=false angle_enable_dawn=false'
+# Use extra_ldflags to link CoreFoundation for the Vulkan loader on iOS
+# The loader uses CFRelease/CFBundleGetMainBundle but ANGLE's GN doesn't add
+# CoreFoundation to the iOS link flags for the vulkan-loader target
+gn gen out/Release --args='target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false is_debug=false angle_enable_vulkan=true angle_shared_libvulkan=true angle_enable_swiftshader=false angle_enable_metal=false angle_enable_gl=false angle_enable_vulkan_validation_layers=false angle_build_tests=false angle_enable_dawn=false extra_ldflags=["-framework","CoreFoundation"]'
 
 echo -e "${GREEN}Building ANGLE (Vulkan)...${NC}"
 ninja -C out/Release libGLESv2 libEGL
@@ -44,5 +47,8 @@ ninja -C out/Release libGLESv2 libEGL
 echo -e "${GREEN}Installing ANGLE (Vulkan)...${NC}"
 cp out/Release/libGLESv2.dylib "$PREFIX/lib/vulkan/"
 cp out/Release/libEGL.dylib "$PREFIX/lib/vulkan/"
+if [ -f out/Release/libvulkan.dylib ]; then
+    cp out/Release/libvulkan.dylib "$PREFIX/lib/vulkan/"
+fi
 
 echo -e "${GREEN}Done! ANGLE Vulkan libraries are located at: $PREFIX/lib/vulkan/${NC}"
