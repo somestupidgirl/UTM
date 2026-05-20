@@ -32,28 +32,46 @@ else
 fi
 
 echo -e "${GREEN}Configuring ANGLE (Vulkan)...${NC}"
-# Patch vulkan-loader for iOS: add missing macro definitions
+
+# ============================================================
+# Patch 1: vulkan-loader source files - add missing macros
+# ============================================================
 sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/settings.c || true
 sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/loader.c || true
 
-# Patch vulkan-loader BUILD.gn: the loader uses CoreFoundation (CFRelease, CFBundleGetMainBundle, etc.)
-# but ANGLE's GN only adds it for is_mac, not is_ios. Fix by changing is_mac to is_apple.
+# ============================================================
+# Patch 2: vulkan-loader BUILD.gn - add CoreFoundation for iOS
+# The loader uses CF* functions but ANGLE only links CoreFoundation for is_mac
+# ============================================================
 VULKAN_LOADER_GN="third_party/vulkan-loader/src/BUILD.gn"
-echo -e "${GREEN}Patching vulkan-loader BUILD.gn for CoreFoundation on iOS...${NC}"
-# Method 1: If BUILD.gn has 'is_mac' gating CoreFoundation, broaden to is_apple
+echo -e "${GREEN}Patching vulkan-loader BUILD.gn (is_mac -> is_apple)...${NC}"
 sed -i '' 's/if (is_mac)/if (is_apple)/g' "$VULKAN_LOADER_GN"
-# Method 2: If CoreFoundation is still not linked for iOS, append it
 if ! grep -q 'CoreFoundation' "$VULKAN_LOADER_GN"; then
-    echo -e "${GREEN}CoreFoundation not found in BUILD.gn, adding manually...${NC}"
-    # Find the libvulkan shared_library target and add frameworks
+    echo -e "${GREEN}CoreFoundation not found, adding manually...${NC}"
     sed -i '' '/shared_library("libvulkan")/{
 n
 a\
   if (is_ios) { frameworks = [ "CoreFoundation.framework" ] }
 }' "$VULKAN_LOADER_GN"
 fi
-echo -e "${GREEN}Current CoreFoundation references in BUILD.gn:${NC}"
-grep -n -i "corefoundation\|is_mac\|is_apple\|frameworks" "$VULKAN_LOADER_GN" || echo "(none found)"
+
+# ============================================================
+# Patch 3: Vulkan renderer BUILD.gn - include VulkanMac display for iOS
+# ANGLE's Vulkan backend gates the "mac" display (used for MoltenVK on Apple)
+# behind is_mac, but iOS also needs it. Change is_mac to is_apple.
+# ============================================================
+echo -e "${GREEN}Patching ANGLE Vulkan backend BUILD.gn files (is_mac -> is_apple)...${NC}"
+# Patch all BUILD.gn files in the vulkan renderer directory
+find src/libANGLE/renderer/vulkan -name "BUILD.gn" -exec sed -i '' 's/if (is_mac)/if (is_apple)/g' {} \;
+# Also patch the main libANGLE BUILD.gn which may gate vulkan mac backend
+find src/libANGLE -maxdepth 1 -name "BUILD.gn" -exec sed -i '' 's/if (is_mac)/if (is_apple)/g' {} \;
+# And the top-level src BUILD.gn
+find src -maxdepth 1 -name "BUILD.gn" -exec sed -i '' 's/if (is_mac)/if (is_apple)/g' {} \;
+
+# Debug: show what references exist for the VulkanMac display
+echo -e "${GREEN}Checking VulkanMac display references...${NC}"
+grep -rn "VulkanMac\|DisplayVkMac\|vulkan_mac\|is_apple" src/libANGLE/renderer/vulkan/BUILD.gn 2>/dev/null | head -20 || echo "(file not found)"
+grep -rn "vulkan_mac\|VulkanMac" src/libANGLE/BUILD.gn 2>/dev/null | head -10 || echo "(not in libANGLE BUILD.gn)"
 
 gn gen out/Release --args='target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false is_debug=false angle_enable_vulkan=true angle_shared_libvulkan=true angle_enable_swiftshader=false angle_enable_metal=false angle_enable_gl=false angle_enable_vulkan_validation_layers=false angle_build_tests=false angle_enable_dawn=false'
 
