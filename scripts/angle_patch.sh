@@ -13,52 +13,70 @@ echo "Done: patched settings.c and loader.c"
 echo ""
 echo "=== Patch 2: vulkan-loader BUILD.gn - CoreFoundation for iOS ==="
 VULKAN_LOADER_GN="third_party/vulkan-loader/src/BUILD.gn"
-echo "Before patch - is_mac references:"
-grep -n 'is_mac' "$VULKAN_LOADER_GN" || echo "(none)"
-echo "Before patch - CoreFoundation references:"
-grep -n 'CoreFoundation' "$VULKAN_LOADER_GN" || echo "(none)"
-
 sed -i '' 's/if (is_mac)/if (is_apple)/g' "$VULKAN_LOADER_GN"
 if ! grep -q 'CoreFoundation' "$VULKAN_LOADER_GN"; then
-    echo "CoreFoundation not found in BUILD.gn, adding manually..."
     sed -i '' '/shared_library("libvulkan")/{
 n
 a\
   if (is_ios) { frameworks = [ "CoreFoundation.framework" ] }
 }' "$VULKAN_LOADER_GN"
 fi
-
-echo "After patch - is_apple references:"
-grep -n 'is_apple' "$VULKAN_LOADER_GN" || echo "(none)"
-echo "After patch - CoreFoundation references:"
-grep -n 'CoreFoundation' "$VULKAN_LOADER_GN" || echo "(none)"
-echo "After patch - frameworks references:"
-grep -n 'frameworks' "$VULKAN_LOADER_GN" || echo "(none)"
+echo "Done: CoreFoundation patched"
 
 echo ""
-echo "=== Patch 3: Vulkan renderer BUILD.gn - VulkanMac display for iOS ==="
-echo "Before patch - is_mac in vulkan renderer:"
-grep -rn 'is_mac' src/libANGLE/renderer/vulkan/BUILD.gn 2>/dev/null | head -20 || echo "(file not found)"
-echo "Before patch - VulkanMac/DisplayVkMac references:"
-grep -rn 'VulkanMac\|DisplayVkMac\|vulkan_mac' src/libANGLE/renderer/vulkan/BUILD.gn 2>/dev/null | head -20 || echo "(none)"
-
-# Patch all BUILD.gn files: is_mac -> is_apple
-find src/libANGLE/renderer/vulkan -name "BUILD.gn" -exec sed -i '' 's/if (is_mac)/if (is_apple)/g' {} \;
-find src/libANGLE -maxdepth 1 -name "BUILD.gn" -exec sed -i '' 's/if (is_mac)/if (is_apple)/g' {} \;
-find src -maxdepth 1 -name "BUILD.gn" -exec sed -i '' 's/if (is_mac)/if (is_apple)/g' {} \;
-
-echo "After patch - is_apple in vulkan renderer:"
-grep -rn 'is_apple' src/libANGLE/renderer/vulkan/BUILD.gn 2>/dev/null | head -20 || echo "(none)"
-echo "After patch - VulkanMac/DisplayVkMac references:"
-grep -rn 'VulkanMac\|DisplayVkMac\|vulkan_mac' src/libANGLE/renderer/vulkan/BUILD.gn 2>/dev/null | head -20 || echo "(none)"
+echo "============================================================"
+echo "=== DEBUG: Finding where VulkanMac backend is controlled ==="
+echo "============================================================"
 
 echo ""
-echo "=== Checking Display.cpp for VulkanMac references ==="
-grep -n 'VulkanMac\|CreateVulkanMac\|IsVulkanMac' src/libANGLE/Display.cpp 2>/dev/null | head -10 || echo "(none)"
+echo "--- Search ALL BUILD.gn/gni files for DisplayVkMac ---"
+grep -rn 'DisplayVkMac' --include='*.gn' --include='*.gni' . 2>/dev/null | head -30 || echo "(not found)"
 
 echo ""
-echo "=== Listing vulkan/mac directory ==="
-ls -la src/libANGLE/renderer/vulkan/mac/ 2>/dev/null || echo "(directory not found)"
+echo "--- Search ALL BUILD.gn/gni files for VulkanMac ---"
+grep -rn 'VulkanMac\|vulkan_mac\|vulkan.*mac' --include='*.gn' --include='*.gni' . 2>/dev/null | head -30 || echo "(not found)"
 
 echo ""
-echo "=== All patches applied successfully ==="
+echo "--- Search for angle_enable_vulkan related GN variables ---"
+grep -rn 'angle_enable_vulkan' --include='*.gn' --include='*.gni' . 2>/dev/null | grep -i 'mac\|apple\|ios' | head -20 || echo "(not found)"
+
+echo ""
+echo "--- Search for CreateVulkanMacDisplay definition ---"
+grep -rn 'CreateVulkanMacDisplay\|IsVulkanMacDisplayAvailable' --include='*.cpp' --include='*.mm' --include='*.h' src/libANGLE/ 2>/dev/null | head -20 || echo "(not found)"
+
+echo ""
+echo "--- Search Display.cpp for how VulkanMac is conditionally compiled ---"
+grep -B5 -A2 'VulkanMac' src/libANGLE/Display.cpp 2>/dev/null || echo "(not found)"
+
+echo ""
+echo "--- Search for ANGLE_ENABLE_VULKAN ifdef around VulkanMac ---"
+grep -B10 'CreateVulkanMacDisplay' src/libANGLE/Display.cpp 2>/dev/null | head -20 || echo "(not found)"
+
+echo ""
+echo "--- List all .gn/.gni files in vulkan renderer ---"
+find src/libANGLE/renderer/vulkan -name '*.gn' -o -name '*.gni' 2>/dev/null || echo "(none)"
+
+echo ""
+echo "--- Content of vulkan renderer BUILD.gn (mac-related sections) ---"
+grep -n -B2 -A5 'mac\|apple\|ios' src/libANGLE/renderer/vulkan/BUILD.gn 2>/dev/null | head -50 || echo "(not found or no mac references)"
+
+echo ""
+echo "--- Search for where vulkan mac sources are listed ---"
+grep -rn 'mac/' src/libANGLE/renderer/vulkan/BUILD.gn 2>/dev/null | head -20 || echo "(not in BUILD.gn)"
+grep -rn 'mac/' --include='*.gni' src/libANGLE/renderer/vulkan/ 2>/dev/null | head -20 || echo "(not in .gni files)"
+
+echo ""
+echo "--- Check if there's a separate mac BUILD.gn ---"
+ls -la src/libANGLE/renderer/vulkan/mac/BUILD.gn 2>/dev/null || echo "(no BUILD.gn in mac dir)"
+cat src/libANGLE/renderer/vulkan/mac/BUILD.gn 2>/dev/null || echo "(no separate BUILD.gn)"
+
+echo ""
+echo "--- Check angle_vulkan.gni or similar for mac backend ---"
+find . -name '*vulkan*.gni' -not -path '*/third_party/*' 2>/dev/null | head -10
+for f in $(find . -name '*vulkan*.gni' -not -path '*/third_party/*' 2>/dev/null); do
+    echo "Contents of $f (mac-related):"
+    grep -n -B2 -A5 'mac\|apple\|ios\|DisplayVk' "$f" 2>/dev/null | head -30 || echo "(none)"
+done
+
+echo ""
+echo "=== All patches and debug complete ==="
