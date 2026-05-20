@@ -47,7 +47,11 @@ import Foundation
     
     public func write(data: Data) {
         if #available(iOS 13.4, macOS 10.15, *) {
-            try! writeFileHandle.write(contentsOf: data)
+            do {
+                try writeFileHandle.write(contentsOf: data)
+            } catch {
+                logger.error("Serial write failed on port \(self.name): \(error.localizedDescription)")
+            }
         } else {
             writeFileHandle.write(data)
         }
