@@ -23,10 +23,18 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip setuptools
           pip install six pyparsing
+      - name: Fetch ANGLE source
+        run: |
+          source venv/bin/activate
+          bash ./scripts/angle_fetch.sh
+      - name: Apply iOS patches
+        run: |
+          source venv/bin/activate
+          bash ./scripts/angle_patch.sh
       - name: Build ANGLE (Vulkan)
         run: |
           source venv/bin/activate
-          ./scripts/test_build_angle_vulkan.sh
+          bash ./scripts/angle_build.sh
       - name: Compress Output
         run: tar -acf angle-vulkan.tgz sysroot/lib/vulkan
       - name: Upload Artifact
