@@ -36,10 +36,26 @@ echo -e "${GREEN}Configuring ANGLE (Vulkan)...${NC}"
 sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/settings.c || true
 sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/loader.c || true
 
-# Use extra_ldflags to link CoreFoundation for the Vulkan loader on iOS
-# The loader uses CFRelease/CFBundleGetMainBundle but ANGLE's GN doesn't add
-# CoreFoundation to the iOS link flags for the vulkan-loader target
-gn gen out/Release --args='target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false is_debug=false angle_enable_vulkan=true angle_shared_libvulkan=true angle_enable_swiftshader=false angle_enable_metal=false angle_enable_gl=false angle_enable_vulkan_validation_layers=false angle_build_tests=false angle_enable_dawn=false extra_ldflags=["-framework","CoreFoundation"]'
+# Patch vulkan-loader BUILD.gn: the loader uses CoreFoundation (CFRelease, CFBundleGetMainBundle, etc.)
+# but ANGLE's GN only adds it for is_mac, not is_ios. Fix by changing is_mac to is_apple.
+VULKAN_LOADER_GN="third_party/vulkan-loader/src/BUILD.gn"
+echo -e "${GREEN}Patching vulkan-loader BUILD.gn for CoreFoundation on iOS...${NC}"
+# Method 1: If BUILD.gn has 'is_mac' gating CoreFoundation, broaden to is_apple
+sed -i '' 's/if (is_mac)/if (is_apple)/g' "$VULKAN_LOADER_GN"
+# Method 2: If CoreFoundation is still not linked for iOS, append it
+if ! grep -q 'CoreFoundation' "$VULKAN_LOADER_GN"; then
+    echo -e "${GREEN}CoreFoundation not found in BUILD.gn, adding manually...${NC}"
+    # Find the libvulkan shared_library target and add frameworks
+    sed -i '' '/shared_library("libvulkan")/{
+n
+a\
+  if (is_ios) { frameworks = [ "CoreFoundation.framework" ] }
+}' "$VULKAN_LOADER_GN"
+fi
+echo -e "${GREEN}Current CoreFoundation references in BUILD.gn:${NC}"
+grep -n -i "corefoundation\|is_mac\|is_apple\|frameworks" "$VULKAN_LOADER_GN" || echo "(none found)"
+
+gn gen out/Release --args='target_os="ios" target_cpu="arm64" target_environment="device" ios_enable_code_signing=false is_debug=false angle_enable_vulkan=true angle_shared_libvulkan=true angle_enable_swiftshader=false angle_enable_metal=false angle_enable_gl=false angle_enable_vulkan_validation_layers=false angle_build_tests=false angle_enable_dawn=false'
 
 echo -e "${GREEN}Building ANGLE (Vulkan)...${NC}"
 ninja -C out/Release libGLESv2 libEGL
