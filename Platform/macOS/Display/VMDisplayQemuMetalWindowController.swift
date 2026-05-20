@@ -163,6 +163,9 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
         vmDisplay?.addRenderer(renderer) // can be nil if primary
         metalView.delegate = renderer
         metalView.inputDelegate = self
+        metalView.dragDelegate = self
+        metalView.registerForDraggedFiles()
+
         // Start the dedicated render thread. Must happen after the
         // delegate is wired up — the first tick will call into the
         // renderer immediately. FPS preference is applied as part of
@@ -484,6 +487,10 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
         setControl(.resize, isEnabled: false) // disable item
         if isWindowFocusAutoCapture {
             captureMouse()
+        } else {
+            // Claim first responder immediately so keyboard events reach the
+            // guest without requiring the user to engage mouse capture first.
+            window?.makeFirstResponder(metalView)
         }
     }
     
@@ -823,6 +830,13 @@ extension VMDisplayQemuMetalWindowController {
     override func windowDidBecomeKey(_ notification: Notification) {
         if isFullScreen && isFullScreenAutoCapture {
             captureMouse()
+        } else {
+            // Re-assert first responder every time the window regains key focus
+            // so keyboard events reach the guest even after switching apps.
+            let ok = window?.makeFirstResponder(metalView) ?? false
+            #if DEBUG
+            NSLog("UTM-KB: windowDidBecomeKey makeFirstResponder=%d metalViewHidden=%d", ok ? 1 : 0, metalView.isHidden ? 1 : 0)
+            #endif
         }
         super.windowDidBecomeKey(notification)
     }
@@ -911,6 +925,8 @@ extension VMDisplayQemuMetalWindowController: VMMetalViewInputDelegate {
         metalView?.releaseMouse()
         self.captureMouseToolbarButton?.state = .off
         self.window?.subtitle = defaultSubtitle
+        // Restore first responder so keyboard continues to work after release.
+        window?.makeFirstResponder(metalView)
     }
     
     func mouseMove(absolutePoint: CGPoint, buttonMask: CSInputButton) {
@@ -966,10 +982,16 @@ extension VMDisplayQemuMetalWindowController: VMMetalViewInputDelegate {
     
     private func sendExtendedKey(_ button: CSInputKey, keyCode: Int) {
         if (keyCode & 0xFF00) == 0xE000 {
+            #if DEBUG
+            NSLog("UTM-KB: sendExtendedKey extended button=%@ code=0x%x vmInput=%@", "\(button)", 0x100 | (keyCode & 0xFF), vmInput == nil ? "nil" : "set")
+            #endif
             vmInput?.send(button, code: Int32(0x100 | (keyCode & 0xFF)))
         } else if keyCode >= 0x100 {
             logger.warning("ignored invalid keycode \(keyCode)");
         } else {
+            #if DEBUG
+            NSLog("UTM-KB: sendExtendedKey button=%@ code=0x%x vmInput=%@", "\(button)", keyCode, vmInput == nil ? "nil" : "set")
+            #endif
             vmInput?.send(button, code: Int32(keyCode))
         }
     }
@@ -1055,6 +1077,57 @@ extension VMDisplayQemuMetalWindowController: VMMetalViewInputDelegate {
         if !vmInput.keyLock.contains(.num) {
             vmInput.keyLock.insert(.num)
         }
+    }
+}
+
+// MARK: - Drag and drop
+extension VMDisplayQemuMetalWindowController: VMMetalViewDragDelegate {
+    private static let diskImageExtensions: Set<String> = [
+        "iso", "img", "qcow2", "qcow", "raw", "vmdk", "vhd", "vhdx", "vdi"
+    ]
+
+    func metalView(_ view: VMMetalView, didDropFiles urls: [URL]) -> Bool {
+        let diskURLs = urls.filter {
+            Self.diskImageExtensions.contains($0.pathExtension.lowercased())
+        }
+        guard !diskURLs.isEmpty else {
+            showErrorAlert(NSLocalizedString("Only disk image files can be dropped onto the display. Supported formats: ISO, IMG, QCOW2, VMDK, VHD, VHDX, VDI, RAW.", comment: "VMDisplayQemuMetalWindowController"))
+            return false
+        }
+        guard vmQemuConfig?.drives.contains(where: { $0.isExternal }) == true else {
+            showErrorAlert(NSLocalizedString("This virtual machine has no removable drives. Add an external drive in the VM configuration to use drag and drop.", comment: "VMDisplayQemuMetalWindowController"))
+            return false
+        }
+        // Mount each dropped image into the first available (empty) external drive slot.
+        // All drive config access goes through @MainActor methods to avoid Sendable issues.
+        withErrorAlert {
+            var remaining = diskURLs
+            let externalDrives = await self.vmQemuConfig?.drives.filter { $0.isExternal } ?? []
+            for drive in externalDrives {
+                guard !remaining.isEmpty else { break }
+                let currentURL = await self.qemuVM.externalImageURL(for: drive)
+                guard currentURL == nil else { continue }
+                let url = remaining.removeFirst()
+                try await self.qemuVM.changeMedium(drive, to: url)
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    self.window?.subtitle = String.localizedStringWithFormat(
+                        NSLocalizedString("Mounted: %@", comment: "VMDisplayQemuMetalWindowController"),
+                        url.lastPathComponent)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                        self?.window?.subtitle = self?.defaultSubtitle ?? ""
+                    }
+                }
+            }
+            if !remaining.isEmpty {
+                await MainActor.run { [weak self] in
+                    self?.showErrorAlert(String.localizedStringWithFormat(
+                        NSLocalizedString("%lld file(s) could not be mounted because there are no free removable drive slots.", comment: "VMDisplayQemuMetalWindowController"),
+                        remaining.count))
+                }
+            }
+        }
+        return true
     }
 }
 
