@@ -72,22 +72,30 @@ if grep -q '#include <IOSurface/IOSurface.h>' "$MAC_DIR/IOSurfaceSurfaceVkMac.mm
 #endif|' "$MAC_DIR/IOSurfaceSurfaceVkMac.mm"
 fi
 
-# Also check for any NSWindow references that need UIWindow on iOS
+echo ""
+echo "=== Patch 5: Fix macOS-only CALayer APIs in WindowSurfaceVkMac.mm ==="
+# kCALayerWidthSizable, kCALayerHeightSizable, and autoresizingMask on CALayer
+# are macOS-only. On iOS, the UIView handles layer sizing.
+echo "Patching WindowSurfaceVkMac.mm (autoresizingMask -> conditional)..."
+sed -i '' 's|mMetalLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;|#if !TARGET_OS_IPHONE\
+    mMetalLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;\
+#endif|' "$MAC_DIR/WindowSurfaceVkMac.mm"
+
+# Add TargetConditionals.h to WindowSurfaceVkMac.mm if not already present
+if ! grep -q 'TargetConditionals.h' "$MAC_DIR/WindowSurfaceVkMac.mm"; then
+    sed -i '' '1s/^/#include <TargetConditionals.h>\n/' "$MAC_DIR/WindowSurfaceVkMac.mm"
+fi
+
+# Check for other macOS-only APIs that may need wrapping
 echo ""
 echo "--- Checking for other macOS-only APIs in mac backend ---"
-grep -rn 'NSWindow\|NSView\|NSScreen\|NSApplication\|NSOpenGLContext' "$MAC_DIR/" 2>/dev/null | head -20 || echo "(none found)"
+grep -rn 'NSWindow\|NSView\|NSScreen\|NSApplication\|NSOpenGLContext\|kCALayer\|autoresizingMask\|contentView\|\[NSApp\|mainScreen' "$MAC_DIR/" 2>/dev/null | head -30 || echo "(none found)"
 grep -rn 'Cocoa\|AppKit' "$MAC_DIR/" 2>/dev/null | head -20 || echo "(none found)"
 
 echo ""
-echo "--- Show patched headers (first 20 lines) ---"
-echo "WindowSurfaceVkMac.h:"
-head -20 "$MAC_DIR/WindowSurfaceVkMac.h"
-echo ""
-echo "DisplayVkMac.mm (first 20 lines):"
-head -20 "$MAC_DIR/DisplayVkMac.mm"
-echo ""
-echo "IOSurfaceSurfaceVkMac.mm (first 25 lines):"
-head -25 "$MAC_DIR/IOSurfaceSurfaceVkMac.mm"
+echo "--- Show patched WindowSurfaceVkMac.mm (lines 40-55) ---"
+sed -n '40,55p' "$MAC_DIR/WindowSurfaceVkMac.mm" 2>/dev/null || echo "(could not read)"
 
 echo ""
 echo "=== All patches applied ==="
+
