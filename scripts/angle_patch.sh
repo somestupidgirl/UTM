@@ -45,16 +45,20 @@ sed -i '' 's|#include <Cocoa/Cocoa.h>|#include <TargetConditionals.h>\
 #endif|' "$MAC_DIR/WindowSurfaceVkMac.h"
 
 echo "Patching DisplayVkMac.mm (Cocoa -> TARGET_OS_IPHONE conditional)..."
-# DisplayVkMac.mm includes WindowSurfaceVkMac.h which pulls in Cocoa
-# Check if it directly includes Cocoa too
-if grep -q '#include <Cocoa/Cocoa.h>' "$MAC_DIR/DisplayVkMac.mm"; then
-    sed -i '' 's|#include <Cocoa/Cocoa.h>|#include <TargetConditionals.h>\
+# DisplayVkMac.mm uses #import <Cocoa/Cocoa.h> (ObjC style)
+# Handle both #include and #import variants
+sed -i '' 's|#import <Cocoa/Cocoa.h>|#include <TargetConditionals.h>\
+#if TARGET_OS_IPHONE\
+#import <UIKit/UIKit.h>\
+#else\
+#import <Cocoa/Cocoa.h>\
+#endif|' "$MAC_DIR/DisplayVkMac.mm"
+sed -i '' 's|#include <Cocoa/Cocoa.h>|#include <TargetConditionals.h>\
 #if TARGET_OS_IPHONE\
 #include <UIKit/UIKit.h>\
 #else\
 #include <Cocoa/Cocoa.h>\
 #endif|' "$MAC_DIR/DisplayVkMac.mm"
-fi
 
 echo "Patching IOSurfaceSurfaceVkMac.mm (IOSurface header)..."
 # IOSurface/IOSurface.h exists on iOS but in a different location
