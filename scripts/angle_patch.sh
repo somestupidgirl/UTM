@@ -26,23 +26,64 @@ echo "Done: CoreFoundation patched"
 echo ""
 echo "=== Patch 3: vulkan_backend.gni - include VulkanMac display for iOS ==="
 VULKAN_BACKEND_GNI="src/libANGLE/renderer/vulkan/vulkan_backend.gni"
-echo "Before patch - condition around mac backend sources (lines 220-240):"
-sed -n '220,240p' "$VULKAN_BACKEND_GNI" 2>/dev/null || echo "(could not read)"
-
-# The mac backend sources (DisplayVkMac.mm etc.) are gated by is_mac.
-# iOS also uses this backend (via MoltenVK). Change is_mac to is_apple.
 sed -i '' 's/if (is_mac)/if (is_apple)/g' "$VULKAN_BACKEND_GNI"
+echo "Done: vulkan_backend.gni patched"
 
 echo ""
-echo "After patch - condition around mac backend sources (lines 220-240):"
-sed -n '220,240p' "$VULKAN_BACKEND_GNI" 2>/dev/null || echo "(could not read)"
+echo "=== Patch 4: Fix macOS-specific headers in VulkanMac backend for iOS ==="
+
+# WindowSurfaceVkMac.h includes <Cocoa/Cocoa.h> which doesn't exist on iOS
+# Replace with UIKit for iOS, keep Cocoa for macOS
+MAC_DIR="src/libANGLE/renderer/vulkan/mac"
+
+echo "Patching WindowSurfaceVkMac.h (Cocoa -> TARGET_OS_IPHONE conditional)..."
+sed -i '' 's|#include <Cocoa/Cocoa.h>|#include <TargetConditionals.h>\
+#if TARGET_OS_IPHONE\
+#include <UIKit/UIKit.h>\
+#else\
+#include <Cocoa/Cocoa.h>\
+#endif|' "$MAC_DIR/WindowSurfaceVkMac.h"
+
+echo "Patching DisplayVkMac.mm (Cocoa -> TARGET_OS_IPHONE conditional)..."
+# DisplayVkMac.mm includes WindowSurfaceVkMac.h which pulls in Cocoa
+# Check if it directly includes Cocoa too
+if grep -q '#include <Cocoa/Cocoa.h>' "$MAC_DIR/DisplayVkMac.mm"; then
+    sed -i '' 's|#include <Cocoa/Cocoa.h>|#include <TargetConditionals.h>\
+#if TARGET_OS_IPHONE\
+#include <UIKit/UIKit.h>\
+#else\
+#include <Cocoa/Cocoa.h>\
+#endif|' "$MAC_DIR/DisplayVkMac.mm"
+fi
+
+echo "Patching IOSurfaceSurfaceVkMac.mm (IOSurface header)..."
+# IOSurface/IOSurface.h exists on iOS but in a different location
+# On iOS, use IOSurface/IOSurfaceRef.h or the framework directly
+if grep -q '#include <IOSurface/IOSurface.h>' "$MAC_DIR/IOSurfaceSurfaceVkMac.mm"; then
+    sed -i '' 's|#include <IOSurface/IOSurface.h>|#include <TargetConditionals.h>\
+#if TARGET_OS_IPHONE\
+#import <IOSurface/IOSurfaceRef.h>\
+#else\
+#include <IOSurface/IOSurface.h>\
+#endif|' "$MAC_DIR/IOSurfaceSurfaceVkMac.mm"
+fi
+
+# Also check for any NSWindow references that need UIWindow on iOS
+echo ""
+echo "--- Checking for other macOS-only APIs in mac backend ---"
+grep -rn 'NSWindow\|NSView\|NSScreen\|NSApplication\|NSOpenGLContext' "$MAC_DIR/" 2>/dev/null | head -20 || echo "(none found)"
+grep -rn 'Cocoa\|AppKit' "$MAC_DIR/" 2>/dev/null | head -20 || echo "(none found)"
 
 echo ""
-echo "=== Patch 4: angle.gni - fix default for angle_shared_libvulkan ==="
-ANGLE_GNI="gni/angle.gni"
-echo "Before patch - angle_shared_libvulkan default:"
-grep -n 'angle_shared_libvulkan' "$ANGLE_GNI" 2>/dev/null || echo "(not found)"
-# Default is !is_mac (static on mac). For iOS we explicitly set it in GN args, so this is informational only.
+echo "--- Show patched headers (first 20 lines) ---"
+echo "WindowSurfaceVkMac.h:"
+head -20 "$MAC_DIR/WindowSurfaceVkMac.h"
+echo ""
+echo "DisplayVkMac.mm (first 20 lines):"
+head -20 "$MAC_DIR/DisplayVkMac.mm"
+echo ""
+echo "IOSurfaceSurfaceVkMac.mm (first 25 lines):"
+head -25 "$MAC_DIR/IOSurfaceSurfaceVkMac.mm"
 
 echo ""
 echo "=== All patches applied ==="
