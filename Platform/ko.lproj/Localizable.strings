@@ -502,7 +502,7 @@
 "Background task is about to expire" = "백그라운드 작업이 곧 만료됩니다.";
 "Switch back to UTM to avoid termination." = "UTM으로 전환하여 종료를 방지하세요.";
 
-// VMConfigQEMUArgumentsView.swift
+// VMConfigQEMUArgumentsGroupedView.swift
 "Arguments" = "파라미터";
 "Export QEMU Command…" = "QEMU 명령줄 내보내기…";
 "Export all arguments as a text file. This is only for debugging purposes as UTM's built-in QEMU differs from upstream QEMU in supported arguments." = "모든 QEMU 명령줄(파라미터)를 텍스트 파일로 내보냅니다. UTM의 내장 QEMU는 일반 업스트림 QEMU와 지원 파라미터가 다르므로 디버깅 목적으로만 활용하세요.";

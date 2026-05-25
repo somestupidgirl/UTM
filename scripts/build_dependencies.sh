@@ -65,6 +65,27 @@ python_module_test () {
     python3 -c "import $1"
 }
 
+# Ensure a Python module is importable, auto-installing it to an isolated
+# directory if missing. Uses --target to avoid clobbering Homebrew packages.
+# $1 = module name to import, $2 = pip package name (if different from module)
+ensure_python_module () {
+    local mod="$1"
+    local pkg="${2:-$1}"
+    if ! python3 -c "import $mod" >/dev/null 2>&1; then
+        # Set up isolated install directory (once)
+        if [ -z "$_PY_DEPS_DIR" ]; then
+            _PY_DEPS_DIR="$(pwd)/.python_deps"
+            mkdir -p "$_PY_DEPS_DIR"
+            export PYTHONPATH="$_PY_DEPS_DIR${PYTHONPATH:+:$PYTHONPATH}"
+        fi
+        echo "${GREEN}Installing missing Python module '$pkg' for $(python3 --version) into $_PY_DEPS_DIR...${NC}"
+        python3 -m pip install --target "$_PY_DEPS_DIR" "$pkg" || \
+        { echo >&2 "${RED}'$pkg' could not be installed for your Python 3 ($(which python3)).${NC}"; exit 1; }
+        python3 -c "import $mod" >/dev/null 2>&1 || \
+        { echo >&2 "${RED}'$mod' still not importable after installing '$pkg'.${NC}"; exit 1; }
+    fi
+}
+
 check_env () {
     command -v brew >/dev/null 2>&1 || { echo >&2 "${RED}Homebrew is required to be installed.${NC}"; exit 1; }
     brew --prefix llvm >/dev/null 2>&1 || { echo >&2 "${RED}You must install 'llvm' from Homebrew.${NC}"; exit 1; }
@@ -72,12 +93,12 @@ check_env () {
     brew --prefix libxcb >/dev/null 2>&1 || { echo >&2 "${RED}You must install 'libxcb' from Homebrew.${NC}"; exit 1; }
     brew --prefix libxrandr >/dev/null 2>&1 || { echo >&2 "${RED}You must install 'libxrandr' from Homebrew.${NC}"; exit 1; }
     command -v python3 >/dev/null 2>&1 || { echo >&2 "${RED}You must install 'python3' on your host machine.${NC}"; exit 1; }
-    python_module_test six >/dev/null 2>&1 || { echo >&2 "${RED}'six' not found in your Python 3 installation.${NC}"; exit 1; }
-    python_module_test pyparsing >/dev/null 2>&1 || { echo >&2 "${RED}'pyparsing' not found in your Python 3 installation.${NC}"; exit 1; }
-    python_module_test distutils >/dev/null 2>&1 || { echo >&2 "${RED}'setuptools' not found in your Python 3 installation.${NC}"; exit 1; }
-    python_module_test yaml >/dev/null 2>&1 || { echo >&2 "${RED}'pyyaml' not found in your Python 3 installation.${NC}"; exit 1; }
-    python_module_test distlib >/dev/null 2>&1 || { echo >&2 "${RED}'distlib' not found in your Python 3 installation.${NC}"; exit 1; }
-    python_module_test mako >/dev/null 2>&1 || { echo >&2 "${RED}'mako' not found in your Python 3 installation.${NC}"; exit 1; }
+    ensure_python_module six
+    ensure_python_module pyparsing
+    ensure_python_module setuptools
+    ensure_python_module yaml pyyaml
+    ensure_python_module distlib
+    ensure_python_module mako
     command -v meson >/dev/null 2>&1 || { echo >&2 "${RED}You must install 'meson' on your host machine.${NC}"; exit 1; }
     command -v cmake >/dev/null 2>&1 || { echo >&2 "${RED}You must install 'cmake' on your host machine.${NC}"; exit 1; }
     command -v msgfmt >/dev/null 2>&1 || { echo >&2 "${RED}You must install 'gettext' on your host machine.\n\t'msgfmt' needs to be in your \$PATH as well.${NC}"; exit 1; }
@@ -793,11 +814,24 @@ build_moltenvk() {
 build_mesa_host () {
     pushd "$BUILD_DIR/mesa.git"
 
-    HOST_PATH="$(brew --prefix llvm)/bin:$CLEAN_PATH"
-    env -i PATH="$HOST_PATH" meson host_build --prefix="$PREFIX/host" --buildtype=release \
+    # Patch for LLVM 22+ compatibility
+    sed -i '' 's/Driver::GetResourcesPath/clang::GetResourcesPath/g' src/compiler/clc/clc_helpers.cpp || true
+    sed -i '' 's/#include <clang\//\n#undef UNUSED\n#include <clang\//g' src/compiler/clc/clc_helpers.cpp || true
+    awk '/^#include/ { last_include = NR } { lines[NR] = $0 } END { for (i = 1; i <= NR; i++) { print lines[i]; if (i == last_include) print "#define UNUSED __attribute__((unused))" } }' src/compiler/clc/clc_helpers.cpp > tmp.cpp && mv tmp.cpp src/compiler/clc/clc_helpers.cpp
+
+    LLVM_PREFIX="$(brew --prefix llvm)"
+    SPIRV_PREFIX="$(brew --prefix spirv-llvm-translator)"
+    LIBCLC_PREFIX="$(brew --prefix libclc)"
+    SPIRV_TOOLS_PREFIX="$(brew --prefix spirv-tools)"
+    HOST_PATH="$LLVM_PREFIX/bin:$CLEAN_PATH"
+    HOST_PKG_CONFIG_PATH="$LLVM_PREFIX/lib/pkgconfig:$SPIRV_PREFIX/lib/pkgconfig:$LIBCLC_PREFIX/share/pkgconfig:$LIBCLC_PREFIX/lib/pkgconfig:$SPIRV_TOOLS_PREFIX/lib/pkgconfig"
+    env -i PATH="$HOST_PATH" PKG_CONFIG_PATH="$HOST_PKG_CONFIG_PATH" HOME="$HOME" \
+        meson host_build --prefix="$PREFIX/host" --buildtype=release \
         -Dllvm=enabled -Dstrip=true -Dopengl=false -Dgallium-drivers= -Dvulkan-drivers= -Dmesa-clc=enabled -Dinstall-mesa-clc=true
-    env -i PATH="$HOST_PATH" meson compile -C host_build -j $NCPU
-    env -i PATH="$HOST_PATH" meson install -C host_build
+    env -i PATH="$HOST_PATH" PKG_CONFIG_PATH="$HOST_PKG_CONFIG_PATH" HOME="$HOME" \
+        meson compile -C host_build -j $NCPU
+    env -i PATH="$HOST_PATH" PKG_CONFIG_PATH="$HOST_PKG_CONFIG_PATH" HOME="$HOME" \
+        meson install -C host_build
 
     popd
 }
@@ -956,6 +990,8 @@ fi
 CHOST=$CPU-apple-darwin
 export CHOST
 
+QEMU_TARGET_LIST_FLAGS=
+
 case $PLATFORM in
 ios* | visionos* )
     if [ -z "$SDKMINVER" ]; then
@@ -1006,7 +1042,16 @@ ios* | visionos* )
         PLATFORM_FAMILY_NAME="$PLATFORM_FAMILY_PREFIX"
         ;;
     esac
-    QEMU_PLATFORM_BUILD_FLAGS="--enable-shared-lib --disable-cocoa --disable-coreaudio --disable-slirp-smbd --enable-ucontext --with-coroutine=libucontext $HVF_FLAGS $TCI_BUILD_FLAGS"
+    case $PLATFORM in
+    *-tci )
+        ;;
+    * )
+        if [ ! -z "$QEMU_TARGET_LIST" ]; then
+            QEMU_TARGET_LIST_FLAGS="--target-list=$QEMU_TARGET_LIST"
+        fi
+        ;;
+    esac
+    QEMU_PLATFORM_BUILD_FLAGS="--enable-shared-lib --disable-cocoa --disable-coreaudio --disable-slirp-smbd --enable-ucontext --with-coroutine=libucontext $HVF_FLAGS $TCI_BUILD_FLAGS $QEMU_TARGET_LIST_FLAGS"
     ;;
 macos )
     if [ -z "$SDKMINVER" ]; then
@@ -1015,13 +1060,16 @@ macos )
     SDK=macosx
     CFLAGS_TARGET="-target $ARCH-apple-macos$SDKMINVER"
     PLATFORM_FAMILY_NAME="macOS"
+    if [ ! -z "$QEMU_TARGET_LIST" ]; then
+        QEMU_TARGET_LIST_FLAGS="--target-list=$QEMU_TARGET_LIST"
+    fi
     # --disable-sdl: when shared-lib QEMU is auto-configured with SDL2
     # (because Homebrew has sdl2 installed as a transitive dep), ui/sdl2.c
     # references the `qemu_main` entry point which the loader app (UTM)
     # is supposed to provide. UTM uses its own Cocoa/SPICE display path
     # and never satisfies that reference, so the linker fails. Disable
     # SDL outright.
-    QEMU_PLATFORM_BUILD_FLAGS="--enable-shared-lib --disable-cocoa --disable-sdl --cpu=$CPU"
+    QEMU_PLATFORM_BUILD_FLAGS="--enable-shared-lib --disable-cocoa --disable-sdl --cpu=$CPU $QEMU_TARGET_LIST_FLAGS"
     ;;
 * )
     usage

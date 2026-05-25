@@ -537,7 +537,19 @@ extension QEMUTarget {
     }
 }
 
-#if WITH_QEMU_TCI
+#if WITH_QEMU_HV
+/// HV build only supports a reduced set of architectures.
+extension QEMUArchitecture {
+    var isHidden: Bool {
+        switch self {
+        case .aarch64: return false
+        case .i386: return false
+        case .x86_64: return false
+        default: return true
+        }
+    }
+}
+#elseif WITH_QEMU_TCI
 /// TCI build has a reduced set of supported architectures due to size of binaries.
 extension QEMUArchitecture {
     var isHidden: Bool {

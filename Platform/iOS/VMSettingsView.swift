@@ -51,8 +51,8 @@ struct VMSettingsView: View {
                         }
                     }
                     NavigationLink(
-                        destination: VMConfigQEMUView(config: $config.qemu, system: $config.system, fetchFixedArguments: {
-                            config.generatedArguments
+                        destination: VMConfigQEMUView(config: $config.qemu, system: $config.system, fetchArgumentGroups: {
+                            config.groupedGeneratedArguments
                         }).navigationTitle("QEMU"),
                         label: {
                             Label("QEMU", systemImage: "shippingbox")

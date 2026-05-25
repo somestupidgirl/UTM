@@ -17,17 +17,10 @@
 import SwiftUI
 
 struct VMConfigQEMUView: View {
-    private struct Argument: Identifiable {
-        let id: Int
-        let string: String
-    }
-    
     @Binding var config: UTMQemuConfigurationQEMU
     @Binding var system: UTMQemuConfigurationSystem
-    let fetchFixedArguments: () -> [QEMUArgument]
+    let fetchArgumentGroups: () -> [QEMUArgumentGroup]
     @State private var showExportLog: Bool = false
-    @State private var showExportArgs: Bool = false
-    @EnvironmentObject private var data: UTMData
     
     private var logExists: Bool {
         guard let debugLogURL = config.debugLogURL else {
@@ -108,46 +101,22 @@ struct VMConfigQEMUView: View {
                 DetailedSection("QEMU Machine Properties", description: "This is appended to the -machine argument.") {
                     DefaultTextField("", text: $config.machinePropertyOverride.bound, prompt: "Default")
                 }
-                #if os(macOS)
-                // macOS 12+ uses the new VMConfigQEMUArgumentsView
-                if #unavailable(macOS 12) {
-                    additionalArguments
+                if #available(iOS 15, macOS 12, *) {
+                    NavigationLink {
+                        VMConfigQEMUArgumentsGroupedView(
+                            config: $config,
+                            architecture: system.architecture,
+                            argumentGroups: fetchArgumentGroups()
+                        )
+                        #if os(macOS)
+                        .scrollable()
+                        #endif
+                    } label: {
+                        Label("QEMU Arguments", systemImage: "character.textbox")
+                    }
                 }
-                #else
-                additionalArguments
-                #endif
             }.navigationBarItems(trailing: EditButton())
             .disableAutocorrection(true)
-        }
-    }
-    
-    @ViewBuilder
-    var additionalArguments: some View {
-        Section(header: Text("QEMU Arguments")) {
-            let fixedArgs = fetchFixedArguments()
-            Button("Export QEMU Command…") {
-                showExportArgs.toggle()
-            }.modifier(VMShareItemModifier(isPresented: $showExportArgs, shareItem: exportArgs(fixedArgs)))
-            #if os(macOS)
-            // SwiftUI bug: on macOS 11, the ForEach crashes during save
-            if !data.busy {
-                VStack {
-                    ForEach(fixedArgs) { arg in
-                        TextField("", text: .constant(arg.string))
-                    }.disabled(true)
-                    CustomArguments(config: $config)
-                    NewArgumentTextField(config: $config)
-                }
-            }
-            #else
-            List {
-                ForEach(fixedArgs) { arg in
-                    Text(arg.string)
-                }.foregroundColor(.secondary)
-                CustomArguments(config: $config)
-                NewArgumentTextField(config: $config)
-            }
-            #endif
         }
     }
     
@@ -157,80 +126,6 @@ struct VMConfigQEMUView: View {
         }
         return .debugLog(srcLogPath)
     }
-    
-    private func exportArgs(_ args: [QEMUArgument]) -> VMShareItemModifier.ShareItem {
-        var argString = "qemu-system-\(system.architecture.rawValue)"
-        for arg in args {
-            if arg.string.contains(" ") {
-                argString += " \"\(arg.string)\""
-            } else {
-                argString += " \(arg.string)"
-            }
-        }
-        for arg in config.additionalArguments {
-            argString += " \(arg.string)"
-        }
-        return .qemuCommand(argString)
-    }
-}
-
-struct CustomArguments: View {
-    @Binding var config: UTMQemuConfigurationQEMU
-    
-    var body: some View {
-        ForEach($config.additionalArguments) { $arg in
-            let i = config.additionalArguments.firstIndex(of: arg) ?? 0
-            HStack {
-                DefaultTextField("", text: $arg.string, prompt: "(Delete)", onEditingChanged: { editing in
-                    if !editing && arg.string == "" {
-                        DispatchQueue.main.async { // SwiftUI doesn't like removing in a ForEach binding
-                            config.additionalArguments.remove(at: i)
-                        }
-                    }
-                })
-                #if os(macOS)
-                Spacer()
-                if i != 0 {
-                    Button(action: {
-                        config.additionalArguments.move(fromOffsets: IndexSet(integer: i), toOffset: i-1)
-                    }, label: {
-                        Label("Move Up", systemImage: "arrow.up").labelStyle(.iconOnly)
-                    })
-                }
-                #endif
-            }
-        }.onDelete { offsets in
-            config.additionalArguments.remove(atOffsets: offsets)
-        }
-        .onMove { offsets, index in
-            config.additionalArguments.move(fromOffsets: offsets, toOffset: index)
-        }
-    }
-}
-
-struct NewArgumentTextField: View {
-    @Binding var config: UTMQemuConfigurationQEMU
-    @State private var newArg: String = ""
-    
-    var body: some View {
-        Group {
-            DefaultTextField("", text: $newArg, prompt: "New…", onEditingChanged: addArg)
-        }.onDisappear {
-            if newArg != "" {
-                addArg(editing: false)
-            }
-        }
-    }
-    
-    private func addArg(editing: Bool) {
-        guard !editing else {
-            return
-        }
-        if newArg != "" {
-            config.additionalArguments.append(QEMUArgument(newArg))
-        }
-        newArg = ""
-    }
 }
 
 struct VMConfigQEMUView_Previews: PreviewProvider {
@@ -238,7 +133,7 @@ struct VMConfigQEMUView_Previews: PreviewProvider {
     @State static private var system = UTMQemuConfigurationSystem()
     
     static var previews: some View {
-        VMConfigQEMUView(config: $config, system: $system, fetchFixedArguments: { [] })
+        VMConfigQEMUView(config: $config, system: $system, fetchArgumentGroups: { [] })
             .frame(minHeight: 500)
     }
 }

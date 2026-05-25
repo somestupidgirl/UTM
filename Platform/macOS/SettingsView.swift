@@ -220,7 +220,7 @@ struct DisplaySettingsView: View {
     @AppStorage("AppleShowFPSOverlay") var showAppleFPSOverlay: Bool = false
 
     private var isVulkanSupported: Bool {
-        qemuRendererBackend == .qemuRendererBackendDefault || qemuRendererBackend == .qemuRendererBackendAngleMetal
+        qemuRendererBackend == .qemuRendererBackendDefault || qemuRendererBackend == .qemuRendererBackendAngleMetal || qemuRendererBackend == .qemuRendererBackendAngleVulkan
     }
 
     var body: some View {
@@ -243,6 +243,7 @@ struct DisplaySettingsView: View {
                     Text("Default").tag(UTMQEMURendererBackend.qemuRendererBackendDefault)
                     Text("ANGLE (OpenGL)").tag(UTMQEMURendererBackend.qemuRendererBackendAngleGL)
                     Text("ANGLE (Metal)").tag(UTMQEMURendererBackend.qemuRendererBackendAngleMetal)
+                    Text("ANGLE (Vulkan)").tag(UTMQEMURendererBackend.qemuRendererBackendAngleVulkan)
                     Text("Apple Core OpenGL").tag(UTMQEMURendererBackend.qemuRendererBackendCGL)
                 }.help("By default, the best renderer for this device will be used. You can override this with to always use a specific renderer. This only applies to QEMU VMs with GPU accelerated graphics.")
                 Picker("Vulkan Driver", selection: $qemuVulkanDriver) {

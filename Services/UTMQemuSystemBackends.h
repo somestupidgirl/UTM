@@ -23,7 +23,8 @@ typedef NS_ENUM(NSInteger, UTMQEMURendererBackend) {
     kQEMURendererBackendAngleGL = 1,
     kQEMURendererBackendAngleMetal = 2,
     kQEMURendererBackendCGL = 3,
-    kQEMURendererBackendMax = 4,
+    kQEMURendererBackendAngleVulkan = 4,
+    kQEMURendererBackendMax = 5,
 };
 
 /// Specify the sound backend for this VM

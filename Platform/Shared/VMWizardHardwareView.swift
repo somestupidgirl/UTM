@@ -45,6 +45,14 @@ struct VMWizardHardwareView: View {
             }
         }
 
+        var isAvailableInCurrentBuild: Bool {
+            #if WITH_QEMU_HV
+            return [.i440FX, .q35, .arm64Virt].contains(self)
+            #else
+            return true
+            #endif
+        }
+
         var architecture: QEMUArchitecture {
             switch self {
             case .quadra800: return .m68k
@@ -212,7 +220,7 @@ struct VMWizardHardwareView: View {
 
             } else if !isExpertMode {
                 Picker("Machine", selection: $selectedMachine) {
-                    ForEach(SupportedMachine.allCases.filter({ $0.isSupported(running: wizardState.operatingSystem )})) { system in
+                    ForEach(SupportedMachine.allCases.filter({ $0.isAvailableInCurrentBuild && $0.isSupported(running: wizardState.operatingSystem )})) { system in
                         Text(system.title).tag(system)
                     }
                 }.pickerStyle(.inline)

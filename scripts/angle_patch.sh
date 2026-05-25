@@ -1,0 +1,101 @@
+#!/bin/bash
+set -e
+
+export BUILD_DIR="$(pwd)/build"
+export PATH="$(realpath depot_tools.git):$PATH"
+cd "$BUILD_DIR/angle"
+
+echo "=== Patch 1: vulkan-loader source files - add missing macros ==="
+sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/settings.c || true
+sed -i '' '1s/^/#define FALLBACK_CONFIG_DIRS "\/etc\/xdg"\n#define FALLBACK_DATA_DIRS "\/usr\/local\/share:\/usr\/share"\n#define SYSCONFDIR "\/etc"\n/' third_party/vulkan-loader/src/loader/loader.c || true
+echo "Done: patched settings.c and loader.c"
+
+echo ""
+echo "=== Patch 2: vulkan-loader BUILD.gn - CoreFoundation for iOS ==="
+VULKAN_LOADER_GN="third_party/vulkan-loader/src/BUILD.gn"
+sed -i '' 's/if (is_mac)/if (is_apple)/g' "$VULKAN_LOADER_GN"
+if ! grep -q 'CoreFoundation' "$VULKAN_LOADER_GN"; then
+    sed -i '' '/shared_library("libvulkan")/{
+n
+a\
+  if (is_ios) { frameworks = [ "CoreFoundation.framework" ] }
+}' "$VULKAN_LOADER_GN"
+fi
+echo "Done: CoreFoundation patched"
+
+echo ""
+echo "=== Patch 3: vulkan_backend.gni - include VulkanMac display for iOS ==="
+VULKAN_BACKEND_GNI="src/libANGLE/renderer/vulkan/vulkan_backend.gni"
+sed -i '' 's/if (is_mac)/if (is_apple)/g' "$VULKAN_BACKEND_GNI"
+echo "Done: vulkan_backend.gni patched"
+
+echo ""
+echo "=== Patch 4: Fix macOS-specific headers in VulkanMac backend for iOS ==="
+
+# WindowSurfaceVkMac.h includes <Cocoa/Cocoa.h> which doesn't exist on iOS
+# Replace with UIKit for iOS, keep Cocoa for macOS
+MAC_DIR="src/libANGLE/renderer/vulkan/mac"
+
+echo "Patching WindowSurfaceVkMac.h (Cocoa -> TARGET_OS_IPHONE conditional)..."
+sed -i '' 's|#include <Cocoa/Cocoa.h>|#include <TargetConditionals.h>\
+#if TARGET_OS_IPHONE\
+#include <UIKit/UIKit.h>\
+#else\
+#include <Cocoa/Cocoa.h>\
+#endif|' "$MAC_DIR/WindowSurfaceVkMac.h"
+
+echo "Patching DisplayVkMac.mm (Cocoa -> TARGET_OS_IPHONE conditional)..."
+# DisplayVkMac.mm uses #import <Cocoa/Cocoa.h> (ObjC style)
+# Handle both #include and #import variants
+sed -i '' 's|#import <Cocoa/Cocoa.h>|#include <TargetConditionals.h>\
+#if TARGET_OS_IPHONE\
+#import <UIKit/UIKit.h>\
+#else\
+#import <Cocoa/Cocoa.h>\
+#endif|' "$MAC_DIR/DisplayVkMac.mm"
+sed -i '' 's|#include <Cocoa/Cocoa.h>|#include <TargetConditionals.h>\
+#if TARGET_OS_IPHONE\
+#include <UIKit/UIKit.h>\
+#else\
+#include <Cocoa/Cocoa.h>\
+#endif|' "$MAC_DIR/DisplayVkMac.mm"
+
+echo "Patching IOSurfaceSurfaceVkMac.mm (IOSurface header)..."
+# IOSurface/IOSurface.h exists on iOS but in a different location
+# On iOS, use IOSurface/IOSurfaceRef.h or the framework directly
+if grep -q '#include <IOSurface/IOSurface.h>' "$MAC_DIR/IOSurfaceSurfaceVkMac.mm"; then
+    sed -i '' 's|#include <IOSurface/IOSurface.h>|#include <TargetConditionals.h>\
+#if TARGET_OS_IPHONE\
+#import <IOSurface/IOSurfaceRef.h>\
+#else\
+#include <IOSurface/IOSurface.h>\
+#endif|' "$MAC_DIR/IOSurfaceSurfaceVkMac.mm"
+fi
+
+echo ""
+echo "=== Patch 5: Fix macOS-only CALayer APIs in WindowSurfaceVkMac.mm ==="
+# kCALayerWidthSizable, kCALayerHeightSizable, and autoresizingMask on CALayer
+# are macOS-only. On iOS, the UIView handles layer sizing.
+echo "Patching WindowSurfaceVkMac.mm (autoresizingMask -> conditional)..."
+sed -i '' 's|mMetalLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;|#if !TARGET_OS_IPHONE\
+    mMetalLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;\
+#endif|' "$MAC_DIR/WindowSurfaceVkMac.mm"
+
+# Add TargetConditionals.h to WindowSurfaceVkMac.mm if not already present
+if ! grep -q 'TargetConditionals.h' "$MAC_DIR/WindowSurfaceVkMac.mm"; then
+    sed -i '' '1s/^/#include <TargetConditionals.h>\n/' "$MAC_DIR/WindowSurfaceVkMac.mm"
+fi
+
+# Check for other macOS-only APIs that may need wrapping
+echo ""
+echo "--- Checking for other macOS-only APIs in mac backend ---"
+grep -rn 'NSWindow\|NSView\|NSScreen\|NSApplication\|NSOpenGLContext\|kCALayer\|autoresizingMask\|contentView\|\[NSApp\|mainScreen' "$MAC_DIR/" 2>/dev/null | head -30 || echo "(none found)"
+grep -rn 'Cocoa\|AppKit' "$MAC_DIR/" 2>/dev/null | head -20 || echo "(none found)"
+
+echo ""
+echo "--- Show patched WindowSurfaceVkMac.mm (lines 40-55) ---"
+sed -n '40,55p' "$MAC_DIR/WindowSurfaceVkMac.mm" 2>/dev/null || echo "(could not read)"
+
+echo ""
+echo "=== All patches applied ==="
+

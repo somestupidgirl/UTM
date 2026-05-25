@@ -243,7 +243,7 @@ extension UTMQemuVirtualMachine {
                     throw UTMQemuVirtualMachineError.vulkanVersionNotSupported
                 }
             }
-            if ![.qemuRendererBackendDefault, .qemuRendererBackendAngleMetal].contains(rendererBackend) {
+            if ![.qemuRendererBackendDefault, .qemuRendererBackendAngleMetal, .qemuRendererBackendAngleVulkan].contains(rendererBackend) {
                 if driver == .qemuVulkanDriverDefault || driver == .qemuVulkanDriverDisabled {
                     return .qemuVulkanDriverDisabled
                 } else {
