@@ -492,13 +492,21 @@ extension UTMRemoteServer {
 
         @Published var approvedClients: Set<Client> {
             didSet {
-                UserDefaults.standard.setValue(try! approvedClients.propertyList(), forKey: "TrustedClients")
+                do {
+                    UserDefaults.standard.setValue(try approvedClients.propertyList(), forKey: "TrustedClients")
+                } catch {
+                    logger.error("Failed to persist TrustedClients: \(error.localizedDescription)")
+                }
             }
         }
 
         @Published var blockedClients: Set<Client> {
             didSet {
-                UserDefaults.standard.setValue(try! blockedClients.propertyList(), forKey: "BlockedClients")
+                do {
+                    UserDefaults.standard.setValue(try blockedClients.propertyList(), forKey: "BlockedClients")
+                } catch {
+                    logger.error("Failed to persist BlockedClients: \(error.localizedDescription)")
+                }
             }
         }
 

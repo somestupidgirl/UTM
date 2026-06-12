@@ -31,7 +31,11 @@ extension UTMData {
         if let session = VMSessionState.allActiveSessions.values.first(where: { $0.vm.id == wrapped.id }) {
             session.showWindow()
         } else if vm.isStopped || vm.isTakeoverAllowed {
-            let session = VMSessionState(for: wrapped as! (any UTMSpiceVirtualMachine))
+            guard let spiceVM = wrapped as? (any UTMSpiceVirtualMachine) else {
+                showErrorAlert(message: NSLocalizedString("This virtual machine type is not supported on this device.", comment: "UTMDataExtension"))
+                return
+            }
+            let session = VMSessionState(for: spiceVM)
             session.start(options: options)
         } else {
             showErrorAlert(message: NSLocalizedString("This virtual machine is already running. In order to run it from this device, you must stop it first.", comment: "UTMDataExtension"))

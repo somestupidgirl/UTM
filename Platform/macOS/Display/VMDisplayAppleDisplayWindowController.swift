@@ -17,6 +17,54 @@
 import Foundation
 import Virtualization
 
+// MARK: - Apple Feedback report: Virtualization.framework lacks ProMotion / variable refresh rate support
+//
+// Investigation summary (April 2026, macOS 26.4 / Xcode 16.3):
+//
+// VZVirtualMachineView is an NSView subclass that renders guest frames via Core Animation
+// (IOSurface → CALayer). It does NOT use MTKView or any Metal-based draw loop, so
+// preferredFramesPerSecond / CAFrameRateRange are irrelevant here.
+//
+// The full public surface of the display stack was audited:
+//   • VZVirtualMachineView          – properties: virtualMachine, capturesSystemKeys,
+//                                     automaticallyReconfiguresDisplay. NO refresh-rate API.
+//   • VZMacGraphicsDisplayConfiguration – widthInPixels, heightInPixels, pixelsPerInch.
+//                                     NO refreshRate property.
+//   • -initForScreen:sizeInPoints:  – copies pixel dimensions and DPI from NSScreen,
+//                                     but does NOT pass the screen's refresh rate to the guest.
+//   • VZGraphicsDisplay             – reconfigure(sizeInPixels:), reconfigure(configuration:).
+//                                     Reconfiguration API exists for resolution only.
+//   • VZMacGraphicsDisplay          – adds pixelsPerInch (read-only). NO refresh-rate API.
+//
+// Private symbols exported from Virtualization.framework (via TBD + dyld shared cache):
+//   _VZFramebuffer, _VZFramebufferView, _VZLinearFramebufferGraphicsDisplay,
+//   _VZLinearFramebufferGraphicsDevice, _VZLinearFramebufferGraphicsDeviceConfiguration,
+//   _VZDisplayPresenter — none expose a refresh-rate or frame-rate property.
+//
+// The string "initWithSizeInPixels:sizeInPoints:refreshRate:error:" found in the dyld shared
+// cache belongs to SkyLight/WindowServer (CGVirtualDisplay), NOT to Virtualization.framework.
+//
+// NSWindow.didChangeScreenNotification is observed in windowDidLoad (see below), but only to
+// update contentMinSize — there is nothing to call for refresh rate because no API exists.
+//
+// What Apple must expose for a proper fix (Apple Feedback request):
+//
+//   1. A `refreshRate` property on VZMacGraphicsDisplayConfiguration, populated from
+//      NSScreen.maximumFramesPerSecond when -initForScreen:sizeInPoints: is used.
+//      Radar: VZMacGraphicsDisplayConfiguration should accept a refreshRate matching the
+//      host display so the guest macOS advertises a ProMotion-capable display mode.
+//
+//   2. A reconfigure(configuration:) overload or a dedicated
+//      VZGraphicsDisplay.reconfigure(refreshRate:error:) method so the refresh rate can
+//      be updated at runtime (e.g. when the window moves to a different screen).
+//      Radar: VZGraphicsDisplay.reconfigure() only supports resolution, not timing.
+//
+//   3. VZVirtualMachineView should respond to NSWindow.didChangeScreenNotification
+//      internally and automatically pass the new screen's refresh rate to the guest,
+//      analogous to how automaticallyReconfiguresDisplay handles resolution.
+//      Radar: VZVirtualMachineView lacks an automaticallyReconfiguresDisplayRefreshRate
+//      property (or the existing automaticallyReconfiguresDisplay should subsume timing).
+
 @available(macOS 12, *)
 class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
     var appleView: VZVirtualMachineView! {
@@ -38,7 +86,7 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
     }
 
     var isDynamicResolution: Bool {
-        appleConfig.displays.first!.isDynamicResolution
+        appleConfig.displays.first?.isDynamicResolution ?? false
     }
 
     private let checkSupportsReconfigurationTimeoutPeriod: Double = 1
@@ -50,20 +98,48 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
     private var isReadyToSaveResolution: Bool = false
 
     @Setting("FullScreenAutoCapture") private var isFullScreenAutoCapture: Bool = false
-    
+    @Setting("AppleShowFPSOverlay") private var showAppleFPSOverlay: Bool = false
+
+    private var fpsOverlayLabel: NSTextField?
+    private var settingsChangedToken: Any?
+
     override func windowDidLoad() {
         mainView = VZVirtualMachineView()
         captureMouseToolbarButton.image = captureMouseToolbarButton.alternateImage // show capture keyboard image
         screenChangedToken = NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: nil, queue: .main) { [weak self] _ in
-            // update minSize when we change screens
+            // Update minSize when we change screens.
+            // NOTE: We cannot update the guest display's refresh rate here because
+            // Virtualization.framework exposes no API to set or reconfigure the virtual
+            // display's timing after creation. See the Apple Feedback comment at the top
+            // of this file for the full investigation and the exact APIs Apple needs to add.
             if let self = self,
                let window = window,
                let primaryDisplay = appleConfig.displays.first,
                !supportsReconfiguration || !isDynamicResolution {
                 window.contentMinSize = contentMinSize(in: window, for: windowSize(for: primaryDisplay))
             }
+            self?.updateAppleFPSOverlay()
+        }
+        settingsChangedToken = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateAppleFPSOverlay()
         }
         super.windowDidLoad()
+
+        // Add FPS overlay label on top of the VM view (added after super sets up the view hierarchy)
+        let label = NSTextField(labelWithString: "")
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .white
+        label.backgroundColor = NSColor.black.withAlphaComponent(0.55)
+        label.isBezeled = false
+        label.isEditable = false
+        label.isHidden = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        appleView.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: appleView.topAnchor, constant: 4),
+            label.trailingAnchor.constraint(equalTo: appleView.trailingAnchor, constant: -4),
+        ])
+        fpsOverlayLabel = label
     }
 
     override func windowWillClose(_ notification: Notification) {
@@ -71,6 +147,10 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
             NotificationCenter.default.removeObserver(screenChangedToken)
         }
         screenChangedToken = nil
+        if let settingsChangedToken = settingsChangedToken {
+            NotificationCenter.default.removeObserver(settingsChangedToken)
+        }
+        settingsChangedToken = nil
         stopPollingForSupportsReconfiguration()
         super.windowWillClose(notification)
     }
@@ -83,20 +163,38 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
             appleView.automaticallyReconfiguresDisplay = isDynamicResolution
             startPollingForSupportsReconfiguration()
         }
+        updateAppleFPSOverlay()
         super.enterLive()
     }
-    
+
     override func enterSuspended(isBusy busy: Bool) {
         if !busy {
             appleView.virtualMachine = nil
             appleView.isHidden = true
             screenshotView.image = vm.screenshot?.image
             screenshotView.isHidden = false
+            fpsOverlayLabel?.isHidden = true
         }
         captureMouseToolbarButton.state = .off
         captureMouseButtonPressed(self)
         stopPollingForSupportsReconfiguration()
         super.enterSuspended(isBusy: busy)
+    }
+
+    private func updateAppleFPSOverlay() {
+        guard let label = fpsOverlayLabel else { return }
+        if showAppleFPSOverlay {
+            let hz: Int
+            if #available(macOS 12, *) {
+                hz = (window?.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 60
+            } else {
+                hz = 60
+            }
+            label.stringValue = " Display: \(hz) Hz "
+            label.isHidden = appleView.isHidden // only show while VM view is visible
+        } else {
+            label.isHidden = true
+        }
     }
     
     @available(macOS 12, *)
@@ -135,7 +233,7 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
     }
     
     override func captureMouseButtonPressed(_ sender: Any) {
-        appleView!.capturesSystemKeys = captureMouseToolbarButton.state == .on
+        appleView?.capturesSystemKeys = captureMouseToolbarButton.state == .on
     }
     
     func windowDidEnterFullScreen(_ notification: Notification) {
@@ -157,14 +255,14 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
     }
     
     func windowDidResize(_ notification: Notification) {
-        if supportsReconfiguration && isDynamicResolution {
-            if aspectRatioLocked {
-                window!.resizeIncrements = NSSize(width: 1.0, height: 1.0)
-                window!.minSize = NSSize(width: 400, height: 400)
-                aspectRatioLocked = false
-            }
-            saveDynamicResolution()
+        guard supportsReconfiguration && isDynamicResolution else { return }
+        guard let window = window else { return }
+        if aspectRatioLocked {
+            window.resizeIncrements = NSSize(width: 1.0, height: 1.0)
+            window.minSize = NSSize(width: 400, height: 400)
+            aspectRatioLocked = false
         }
+        saveDynamicResolution()
     }
 
     private func contentMinSize(in window: NSWindow, for scaledSize: CGSize) -> CGSize {
@@ -187,9 +285,10 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
         guard supportsReconfiguration && isDynamicResolution && isReadyToSaveResolution else {
             return
         }
+        guard let window = window else { return }
         var resolution = UTMRegistryEntry.Resolution()
         resolution.isFullscreen = isFullscreen
-        resolution.size = window!.contentRect(forFrameRect: window!.frame).size
+        resolution.size = window.contentRect(forFrameRect: window.frame).size
         vm.registryEntry.resolutionSettings[0] = resolution
     }
 
@@ -220,12 +319,16 @@ class VMDisplayAppleDisplayWindowController: VMDisplayAppleWindowController {
                 cancelCheckSupportsReconfiguration = nil
             } else if checkSupportsReconfigurationTimeoutAttempts > 0 {
                 checkSupportsReconfigurationTimeoutAttempts -= 1
-                DispatchQueue.main.asyncAfter(deadline: .now() + checkSupportsReconfigurationTimeoutPeriod, execute: cancelCheckSupportsReconfiguration!)
+                if let work = cancelCheckSupportsReconfiguration {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + checkSupportsReconfigurationTimeoutPeriod, execute: work)
+                }
             } else {
                 cancelCheckSupportsReconfiguration = nil
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + checkSupportsReconfigurationTimeoutPeriod, execute: cancelCheckSupportsReconfiguration!)
+        if let work = cancelCheckSupportsReconfiguration {
+            DispatchQueue.main.asyncAfter(deadline: .now() + checkSupportsReconfigurationTimeoutPeriod, execute: work)
+        }
     }
 
     func stopPollingForSupportsReconfiguration() {

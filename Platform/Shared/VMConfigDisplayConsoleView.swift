@@ -28,7 +28,9 @@ struct VMConfigDisplayConsoleView: View {
                 return Color.white
             }
         } set: { newValue in
-            config.foregroundColor = newValue.cgColor!.hexString
+            if let cgColor = newValue.cgColor {
+                config.foregroundColor = cgColor.hexString
+            }
         }
     }
     private var backgroundColor: Binding<Color> {
@@ -40,7 +42,9 @@ struct VMConfigDisplayConsoleView: View {
                 return Color.black
             }
         } set: { newValue in
-            config.backgroundColor = newValue.cgColor!.hexString
+            if let cgColor = newValue.cgColor {
+                config.backgroundColor = cgColor.hexString
+            }
         }
     }
         

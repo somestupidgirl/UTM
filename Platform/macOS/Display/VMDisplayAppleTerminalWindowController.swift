@@ -67,15 +67,19 @@ class VMDisplayAppleTerminalWindowController: VMDisplayAppleWindowController, VM
     
     override func updateWindowFrame() {
         isSizeChangeIgnored = true
-        setupTerminal(terminalView, using: serialConfig.terminal!, id: index, for: window!)
+        if let terminal = serialConfig?.terminal, let window = window {
+            setupTerminal(terminalView, using: terminal, id: index, for: window)
+        }
         isSizeChangeIgnored = false
         super.updateWindowFrame()
     }
-    
+
     override func resizeConsoleButtonPressed(_ sender: Any) {
-        let cmd = resizeCommand(for: terminalView, using: serialConfig!.terminal!)
-        serialPort.write(data: cmd.data(using: .ascii)!)
-        
+        guard let terminal = serialConfig?.terminal else { return }
+        let cmd = resizeCommand(for: terminalView, using: terminal)
+        if let data = cmd.data(using: .nonLossyASCII) {
+            serialPort.write(data: data)
+        }
     }
     
     override func captureMouseButtonPressed(_ sender: Any) {
@@ -107,7 +111,7 @@ extension VMDisplayAppleTerminalWindowController: TerminalViewDelegate, UTMSeria
     }
     
     func setTerminalTitle(source: TerminalView, title: String) {
-        window!.subtitle = title
+        window?.subtitle = title
     }
     
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {

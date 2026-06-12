@@ -51,7 +51,7 @@ struct UTMApp: App {
             contentView
             .environmentObject(data)
             .onReceive(vmSessionCreatedNotification) { output in
-                let newSession = output.userInfo!["Session"] as! VMSessionState
+                guard let newSession = output.userInfo?["Session"] as? VMSessionState else { return }
                 if let window = newSession.windows.first {
                     openWindow(value: window)
                 } else {
@@ -59,7 +59,7 @@ struct UTMApp: App {
                 }
             }
             .onReceive(vmSessionEndedNotification) { output in
-                let endedSession = output.userInfo!["Session"] as! VMSessionState
+                guard let endedSession = output.userInfo?["Session"] as? VMSessionState else { return }
                 for globalWindow in endedSession.windows {
                     dismissWindow(value: globalWindow)
                 }

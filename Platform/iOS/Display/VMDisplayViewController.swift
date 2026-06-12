@@ -119,8 +119,7 @@ public extension VMDisplayViewController {
 
     @discardableResult
     func debounce(_ delaySeconds: Int, context: Any? = nil, action: @escaping () -> Void) -> Any {
-        if context != nil {
-            let previous = context as! DispatchWorkItem
+        if let previous = context as? DispatchWorkItem {
             previous.cancel()
         }
         let item = DispatchWorkItem(block: action)

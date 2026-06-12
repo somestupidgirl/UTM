@@ -159,6 +159,7 @@ struct ApplicationSettingsView: View {
     @AppStorage("HideDockIcon") var isDockIconHidden = false
     @AppStorage("ShowMenuIcon") var isMenuIconShown = false
     @AppStorage("PreventIdleSleep") var isPreventIdleSleep = false
+    @AppStorage("PauseOnSleep") var isPauseOnSleep = true
     @AppStorage("NoQuitConfirmation") var isNoQuitConfirmation = false
     @AppStorage("NoUsbPrompt") var isNoUsbPrompt = false
 
@@ -185,6 +186,9 @@ struct ApplicationSettingsView: View {
             Toggle(isOn: $isPreventIdleSleep, label: {
                 Text("Prevent system from sleeping when any VM is running")
             })
+            Toggle(isOn: $isPauseOnSleep, label: {
+                Text("Pause all running VMs on sleep, resume on wake")
+            }).help("When the Mac goes to sleep, running virtual machines are paused cleanly. They are automatically resumed when the Mac wakes. This prevents guest clock drift and avoids network disruption caused by the host freezing mid-execution.")
             Toggle(isOn: $isNoQuitConfirmation, label: {
                 Text("Do not show confirmation when closing a running VM")
             }).help("Closing a VM without properly shutting it down could result in data loss.")
@@ -212,6 +216,8 @@ struct DisplaySettingsView: View {
     @AppStorage("QEMURendererBackend") var qemuRendererBackend: UTMQEMURendererBackend = .qemuRendererBackendDefault
     @AppStorage("QEMUVulkanDriver") var qemuVulkanDriver: UTMQEMUVulkanDriver = .qemuVulkanDriverDefault
     @AppStorage("QEMURendererFPSLimit") var qemuRendererFpsLimit: Int = 0
+    @AppStorage("QEMUShowFPSOverlay") var showFPSOverlay: Bool = false
+    @AppStorage("AppleShowFPSOverlay") var showAppleFPSOverlay: Bool = false
 
     private var isVulkanSupported: Bool {
         qemuRendererBackend == .qemuRendererBackendDefault || qemuRendererBackend == .qemuRendererBackendAngleMetal
@@ -257,12 +263,20 @@ struct DisplaySettingsView: View {
                     Text("The selected renderer backend does not support Vulkan.")
                 }
                 HStack {
-                    Stepper("FPS Limit", value: $qemuRendererFpsLimit, in: 0...240, step: 15)
+                    Stepper("Frame Rate Limit", value: $qemuRendererFpsLimit, in: 0...240, step: 15)
                     NumberTextField("", number: $qemuRendererFpsLimit, prompt: "None")
                         .frame(width: 80)
                         .multilineTextAlignment(.trailing)
-                        .help("If set, a frame limit can improve smoothness in rendering by preventing stutters when set to the lowest value your device can handle.")
+                        .help("Caps the Metal render loop to this many frames per second (0 = no cap). Useful for reducing GPU load or improving smoothness at a known-good rate. This sets the maximum — actual FPS may be lower.")
                 }
+                Toggle(isOn: $showFPSOverlay) {
+                    Text("Show live FPS counter (QEMU VMs)")
+                }.help("Overlays a live frames-per-second counter in the corner of each QEMU display window, measured from actual Metal draw calls. Useful for checking rendering performance.")
+            }
+            Section(header: Text("Apple Virtualization Display")) {
+                Toggle(isOn: $showAppleFPSOverlay) {
+                    Text("Show display refresh rate (Apple VMs)")
+                }.help("Overlays the host display's current refresh rate (e.g. 60 Hz or 120 Hz) in the corner of Apple Virtualization VM windows. Useful for verifying ProMotion/high-refresh-rate support. Note: this reflects the host display rate, not the guest render rate, since Apple Virtualization does not expose a frame delivery API.")
             }
         }
     }
@@ -519,6 +533,7 @@ extension UserDefaults {
     @objc dynamic var ShowMenuIcon: Bool { false }
     @objc dynamic var HideDockIcon: Bool { false }
     @objc dynamic var PreventIdleSleep: Bool { false }
+    @objc dynamic var PauseOnSleep: Bool { true }
     @objc dynamic var NoQuitConfirmation: Bool { false }
     @objc dynamic var NoCursorCaptureAlert: Bool { false }
     @objc dynamic var FullScreenAutoCapture: Bool { false }
@@ -532,6 +547,8 @@ extension UserDefaults {
     @objc dynamic var InvertScroll: Bool { false }
     @objc dynamic var QEMURendererBackend: Int { 0 }
     @objc dynamic var QEMURendererFPSLimit: Int { 0 }
+    @objc dynamic var QEMUShowFPSOverlay: Bool { false }
+    @objc dynamic var AppleShowFPSOverlay: Bool { false }
 }
 
 @available(macOS 11, *)

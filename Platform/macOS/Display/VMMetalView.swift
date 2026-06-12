@@ -15,9 +15,21 @@
 //
 
 import Carbon.HIToolbox
+import UniformTypeIdentifiers
+
+// MARK: - Drag-and-drop delegate
+
+protocol VMMetalViewDragDelegate: AnyObject {
+    /// Called when the user drops one or more file URLs onto the Metal view.
+    /// Return `true` if the drop was handled.
+    func metalView(_ view: VMMetalView, didDropFiles urls: [URL]) -> Bool
+}
+
+// MARK: - VMMetalView
 
 class VMMetalView: MTKView {
     weak var inputDelegate: VMMetalViewInputDelegate?
+    weak var dragDelegate: VMMetalViewDragDelegate?
     private var wholeTrackingArea: NSTrackingArea?
     private var lastModifiers = NSEvent.ModifierFlags()
     private var lastKeyDown: Int?
@@ -27,6 +39,15 @@ class VMMetalView: MTKView {
     @Setting("HandleInitialClick") private var isHandleInitialClick: Bool = false
     @Setting("IsCtrlCmdSwapped") private var isCtrlCmdSwapped = false
     @Setting("IsISOKeySwapped") private var isISOKeySwapped = false
+
+    /// Monotonically-increasing count of completed Metal draw calls (main-thread only).
+    /// Callers can snapshot this value at 1-second intervals to compute live FPS.
+    private(set) var renderFrameCount: Int = 0
+
+    override func draw() {
+        renderFrameCount += 1
+        super.draw()
+    }
 
     /// On ISO keyboards we have to switch `kVK_ISO_Section` and `kVK_ANSI_Grave`
     /// from: https://chromium.googlesource.com/chromium/src/+/lkgr/ui/events/keycodes/keyboard_code_conversion_mac.mm
@@ -55,6 +76,67 @@ class VMMetalView: MTKView {
         }
     }
     
+    func registerForDraggedFiles() {
+        registerForDraggedTypes([.fileURL])
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Unregister any prior window's notifications before re-registering,
+        // so we never double-observe if the view moves between windows.
+        NotificationCenter.default.removeObserver(self,
+            name: NSWindow.didBecomeKeyNotification, object: nil)
+        NotificationCenter.default.removeObserver(self,
+            name: NSWindow.didResignKeyNotification, object: nil)
+        guard let window = window else { return }
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(windowDidBecomeKeyNotification(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: window)
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(windowDidResignKeyNotification(_:)),
+            name: NSWindow.didResignKeyNotification,
+            object: window)
+    }
+
+    /// Fired when our window becomes the key window.
+    /// Syncs `isFirstResponder` with whether we are genuinely the window's
+    /// first responder — AppKit does NOT call `becomeFirstResponder` /
+    /// `resignFirstResponder` when the window itself gains/loses key status,
+    /// so our flag can drift from reality (e.g. after a sheet dismissal).
+    @objc private func windowDidBecomeKeyNotification(_ notification: Notification) {
+        let actuallyFirst = window?.firstResponder === self
+        if actuallyFirst && !isFirstResponder {
+            isFirstResponder = true
+            if isMouseInWindow {
+                NSCursor.tryHide()
+            }
+        } else if !actuallyFirst && isFirstResponder {
+            isFirstResponder = false
+            NSCursor.tryUnhide()
+        }
+    }
+
+    /// Fired when our window resigns key status.
+    /// AppKit keeps the first-responder reference intact but stops delivering
+    /// key events.  Release any held keys and update the cursor so the host
+    /// cursor is never stuck hidden while the window is inactive.
+    @objc private func windowDidResignKeyNotification(_ notification: Notification) {
+        guard isFirstResponder else { return }
+        isFirstResponder = false
+        NSCursor.tryUnhide()
+        // Send synthetic key-up for any key that was physically held when
+        // focus was lost, preventing a stuck-key in the guest.
+        if let heldKey = lastKeyDown {
+            inputDelegate?.keyUp(scanCode: heldKey)
+            lastKeyDown = nil
+        }
+        if lastModifiers.containsSpecialKeys {
+            sendModifiers(lastModifiers, press: false)
+            lastModifiers = []
+        }
+    }
+
     override var acceptsFirstResponder: Bool { true }
     
     override func becomeFirstResponder() -> Bool {
@@ -62,9 +144,12 @@ class VMMetalView: MTKView {
         if isMouseInWindow {
             NSCursor.tryHide()
         }
+        #if DEBUG
+        NSLog("UTM-KB: VMMetalView becomeFirstResponder")
+        #endif
         return super.becomeFirstResponder()
     }
-    
+
     override func resignFirstResponder() -> Bool {
         isFirstResponder = false
         NSCursor.tryUnhide()
@@ -75,6 +160,9 @@ class VMMetalView: MTKView {
             sendModifiers(lastModifiers, press: false)
             lastModifiers = []
         }
+        #if DEBUG
+        NSLog("UTM-KB: VMMetalView resignFirstResponder")
+        #endif
         return super.resignFirstResponder()
     }
     
@@ -148,11 +236,15 @@ class VMMetalView: MTKView {
     override func keyDown(with event: NSEvent) {
         guard !event.isARepeat else { return }
         logger.trace("key down: \(event.keyCode)")
+        #if DEBUG
+        NSLog("UTM-KB: keyDown keyCode=%d scanCode=%d", event.keyCode, getScanCodeForEvent(event))
+        #endif
         if event.modifierFlags.contains(.numericPad) {
             inputDelegate?.didUseNumericPad()
         }
-        lastKeyDown = getScanCodeForEvent(event)
-        inputDelegate?.keyDown(scanCode: lastKeyDown!)
+        let scanCode = getScanCodeForEvent(event)
+        lastKeyDown = scanCode
+        inputDelegate?.keyDown(scanCode: scanCode)
     }
     
     override func keyUp(with event: NSEvent) {
@@ -173,9 +265,9 @@ class VMMetalView: MTKView {
             }
             if captureKeyPressed {
                 if isMouseCaptured {
-                    inputDelegate!.releaseMouse()
+                    inputDelegate?.releaseMouse()
                 } else {
-                    inputDelegate!.captureMouse()
+                    inputDelegate?.captureMouse()
                 }
             }
         }
@@ -287,6 +379,28 @@ class VMMetalView: MTKView {
                                      buttonMask: NSEvent.pressedMouseButtons.inputButtons())
         }
         return true
+    }
+}
+
+// MARK: - NSDraggingDestination
+
+extension VMMetalView {
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard dragDelegate != nil,
+              sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self],
+                  options: [.urlReadingFileURLsOnly: true]) else {
+            return []
+        }
+        return .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let delegate = dragDelegate else { return false }
+        let urls = sender.draggingPasteboard
+            .readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+            as? [URL] ?? []
+        guard !urls.isEmpty else { return false }
+        return delegate.metalView(self, didDropFiles: urls)
     }
 }
 
