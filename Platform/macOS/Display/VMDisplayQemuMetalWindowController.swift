@@ -28,9 +28,16 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
                 oldValue?.removeRenderer(renderer)
                 vmDisplay?.addRenderer(renderer)
             }
+            teardownSeamlessCursor(on: oldValue)
+            setupSeamlessCursor(on: vmDisplay)
         }
     }
     private var vmInput: CSInput?
+    private var cursorObservations: [NSKeyValueObservation] = []
+    private var lastCursorSize: CGSize = .zero
+    private var lastCursorHotspot: CGPoint = .zero
+    private var lastCursorHash: UInt64 = 0
+    private var cursorPollTimer: Timer?
     
     private var displaySize: CGSize = .zero
     private var isDisplaySizeDynamic: Bool = false
@@ -45,6 +52,28 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
     private var globalEventMonitor: Any? = nil
     private var ctrlKeyDown: Bool = false
     private var screenChangedToken: Any?
+
+    // Off-main render loop. MTKView's default mode runs `[MTKView draw]`
+    // on the main thread via an internal display link — and `draw`
+    // ultimately blocks in `[CAMetalLayer nextDrawable]` when the
+    // drawable pool exhausts. Under guest GPU pressure (wezterm +
+    // vscode, etc.) that block freezes the main run loop, mouse events
+    // stop being dispatched, and the cursor wedges. We pause MTKView's
+    // internal driver and drive `draw()` from a CVDisplayLink callback
+    // instead — main thread stays free to service AppKit events at all
+    // times, the renderer thread takes the `nextDrawable` stall when
+    // it happens, and a frame quietly drops instead of the whole UI
+    // hanging. Requires the thread-safe CSMetalRenderer (uses an
+    // internal os_unfair_lock to guard render state).
+    //
+    // CVDisplayLink (rather than the macOS 14 CADisplayLink port) is
+    // used because the new CADisplayLink port has subtle run-loop
+    // issues on Apple Silicon — the source never lands in the
+    // requested mode, run(mode:before:) returns immediately each
+    // iteration, callback never fires. CVDisplayLink is deprecated in
+    // macOS 15 but still functional; we'll migrate to whatever Apple
+    // replaces it with when the new CADisplayLink path stabilises.
+    private var cvDisplayLink: CVDisplayLink?
 
     private var displayConfig: UTMQemuConfigurationDisplay? {
         vmQemuConfig?.displays[id]
@@ -89,6 +118,19 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
             logger.critical("Cannot find system default Metal device.")
             return
         }
+        // Reduce CAMetalLayer's drawable pool from the default 3 to 2.
+        // Triple-buffering hides occasional GPU stalls at the cost of
+        // up to one extra frame of host-side queue latency. For a
+        // simple texture-blit renderer (the guest framebuffer) we
+        // never need that headroom — but the worst-case input-to-
+        // photon latency on a 120Hz display drops by ~8ms typical,
+        // up to ~25ms p99 (Flutter Impeller measurements,
+        // github.com/flutter/flutter/issues/138490). If nextDrawable
+        // ever returns nil because the pool is exhausted, drawInMTKView
+        // already early-returns and the frame drops cleanly.
+        if let metalLayer = metalView.layer as? CAMetalLayer {
+            metalLayer.maximumDrawableCount = 2
+        }
         displayView.addSubview(metalView)
         renderer = CSMetalRenderer.init(metalKitView: metalView)
         guard let renderer = self.renderer else {
@@ -96,15 +138,16 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
             logger.critical("Failed to create renderer.")
             return
         }
-        if rendererFpsLimit > 0 {
-            metalView.preferredFramesPerSecond = rendererFpsLimit
-        } else if #available(macOS 12, *), let maxFps = self.window?.screen?.maximumFramesPerSecond {
-            metalView.preferredFramesPerSecond = maxFps
-        }
         renderer.changeUpscaler(displayConfig?.upscalingFilter.metalSamplerMinMagFilter ?? .linear, downscaler: displayConfig?.downscalingFilter.metalSamplerMinMagFilter ?? .linear)
         vmDisplay?.addRenderer(renderer) // can be nil if primary
         metalView.delegate = renderer
         metalView.inputDelegate = self
+        // Start the dedicated render thread. Must happen after the
+        // delegate is wired up — the first tick will call into the
+        // renderer immediately. FPS preference is applied as part of
+        // start (sets `preferredFrameRateRange` on the CADisplayLink
+        // tied to this screen).
+        startBackgroundRender()
 
         screenChangedToken = NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: nil, queue: .main) { [weak self] _ in
             // update minSize when we change screens
@@ -114,6 +157,16 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
                !isDisplaySizeDynamic {
                 window.contentMinSize = contentMinSize(in: window, for: displaySize)
             }
+            // Re-bind CVDisplayLink to the new screen so vsync ticks
+            // match the destination display's refresh rate. Lossless:
+            // CVDisplayLinkSetCurrentCGDisplay can be called on a
+            // running link.
+            if let self = self,
+               let link = self.cvDisplayLink,
+               let screen = self.window?.screen,
+               let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+                CVDisplayLinkSetCurrentCGDisplay(link, displayID)
+            }
         }
 
         if isSecondary && isDisplaySizeDynamic, let window = window {
@@ -122,8 +175,253 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
 
         super.windowDidLoad()
     }
-    
+
+    /// Target FPS for the render loop. Honours an explicit user override
+    /// (`QEMURendererFPSLimit`); otherwise uses the host display's
+    /// maximum refresh, falling back to `NSScreen.main` because at
+    /// `windowDidLoad` time the window often hasn't been placed on a
+    /// screen yet and `self.window?.screen` is nil.
+    private func preferredFpsTarget() -> Int {
+        if rendererFpsLimit > 0 {
+            return rendererFpsLimit
+        }
+        if #available(macOS 12, *) {
+            return self.window?.screen?.maximumFramesPerSecond
+                ?? NSScreen.main?.maximumFramesPerSecond
+                ?? 60
+        }
+        return 60
+    }
+
+    // MARK: - Off-main render loop
+
+    /// Pause MTKView's main-thread display link and drive `draw()`
+    /// from a CVDisplayLink callback running on CV's private thread.
+    /// MTKView.draw() ultimately calls CSMetalRenderer's drawInMTKView:
+    /// which is thread-safe (os_unfair_lock-guarded render state).
+    private func startBackgroundRender() {
+        guard let metalView = metalView else { return }
+        // Disable MTKView's internal driver. MTKView.draw() still
+        // works when called manually in this mode.
+        metalView.isPaused = true
+        metalView.enableSetNeedsDisplay = false
+
+        var link: CVDisplayLink?
+        let status = CVDisplayLinkCreateWithActiveCGDisplays(&link)
+        guard status == kCVReturnSuccess, let link = link else {
+            // Fall back to MTKView's internal display link. The cursor
+            // wedge can still occur on this path, but at least the VM
+            // draws.
+            metalView.isPaused = false
+            return
+        }
+        self.cvDisplayLink = link
+
+        // Output callback: runs on CVDisplayLink's private thread. The
+        // user pointer is an unretained `self`, so don't outlive the
+        // window — `stopBackgroundRender` (called from windowWillClose)
+        // stops the link before the controller is freed.
+        let callback: CVDisplayLinkOutputCallback = { _, _, _, _, _, userInfoPtr in
+            guard let userInfoPtr = userInfoPtr else { return kCVReturnSuccess }
+            let controller = Unmanaged<VMDisplayQemuMetalWindowController>
+                .fromOpaque(userInfoPtr).takeUnretainedValue()
+            // metalView property access from a non-main thread: the
+            // ivar storage is read once; if it's been set to nil by
+            // main during teardown, we just no-op the frame.
+            controller.metalView?.draw()
+            return kCVReturnSuccess
+        }
+        CVDisplayLinkSetOutputCallback(link, callback, Unmanaged.passUnretained(self).toOpaque())
+
+        // Bind to the screen the window's currently on so vsync ticks
+        // match the display refresh rate. If we can't resolve a CGDirectDisplayID,
+        // the link falls back to all-active-displays from create.
+        if let screen = self.window?.screen ?? NSScreen.main,
+           let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+            CVDisplayLinkSetCurrentCGDisplay(link, displayID)
+        }
+        CVDisplayLinkStart(link)
+    }
+
+    private func stopBackgroundRender() {
+        if let link = cvDisplayLink {
+            CVDisplayLinkStop(link)
+        }
+        cvDisplayLink = nil
+    }
+
+    // MARK: - Seamless cursor sync
+    //
+    // Mirrors the guest's cursor shape (I-beam over text, hand over links,
+    // resize, busy spinner, etc.) onto macOS's NSCursor so the user sees
+    // the snappy host-rendered pointer with the guest's contextual shape.
+    // The guest's own cursor sprite is inhibited (isInhibited=true) so
+    // there's no laggy duplicate in the framebuffer.
+
+    private func setupSeamlessCursor(on display: CSDisplay?) {
+        guard let display = display else { return }
+        // The cursor is a weak property on CSDisplay and attaches asynchronously
+        // when the SPICE cursor channel connects, which is typically AFTER
+        // vmDisplay is set. Observe it so we hook the poll once it appears.
+        let cursorAttachObs = display.observe(\.cursor, options: [.new, .initial]) { [weak self] d, _ in
+            self?.attachCursorObservers(d.cursor)
+        }
+        cursorObservations = [cursorAttachObs]
+    }
+
+    private func attachCursorObservers(_ cursor: CSCursor?) {
+        cursorPollTimer?.invalidate()
+        cursorPollTimer = nil
+        guard let cursor = cursor else { return }
+
+        cursor.isInhibited = true
+
+        // Swift's typed KeyPath KVO (`cursor.observe(\.cursorSize, …)`)
+        // silently fails to subscribe to KVO notifications on bridged
+        // CSCursor properties (only .initial fires; subsequent .new
+        // updates never deliver). Poll at 30Hz instead — enough to land
+        // shape transitions within ~33ms, low enough to avoid spamming
+        // NSCursor.set() on every frame (which made the cursor visibly
+        // shake at 60Hz).
+        //
+        // Dedupe via texture-content hash. Two cursors with identical
+        // size+hotspot but different pixels (e.g. arrow vs link-hand,
+        // both 64×64 hotspot=(0,0)) are common and our previous
+        // size+hotspot dedupe missed them entirely.
+        weak var weakCursor: CSCursor? = cursor
+        cursorPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            guard let self = self, let c = weakCursor else { return }
+            self.checkAndApplyCursorIfChanged(c)
+        }
+    }
+
+    private func checkAndApplyCursorIfChanged(_ cursor: CSCursor) {
+        let size = cursor.cursorSize
+        let hotspot = cursor.cursorHotspot
+        guard size.width > 0, size.height > 0,
+              let texture = cursor.texture else {
+            if lastCursorSize != .zero {
+                lastCursorSize = .zero
+                lastCursorHotspot = .zero
+                lastCursorHash = 0
+                DispatchQueue.main.async { [weak self] in
+                    self?.metalView?.displayCursor = nil
+                }
+            }
+            return
+        }
+
+        // Cheap content hash: sample 4 stripes of the cursor. Each stripe
+        // reads the first `sampleWidth` pixels of one row — buffer is
+        // sized to match exactly (sampleWidth × 4 bytes per pixel) so
+        // getBytes doesn't overrun.
+        let w = Int(size.width)
+        let h = Int(size.height)
+        let sampleWidth = min(16, w)
+        let stripeBytes = sampleWidth * 4
+        var stripe = [UInt8](repeating: 0, count: stripeBytes)
+        var hasher = Hasher()
+        hasher.combine(w)
+        hasher.combine(h)
+        for y in stride(from: 0, to: h, by: max(1, h / 4)) {
+            stripe.withUnsafeMutableBytes { ptr in
+                texture.getBytes(ptr.baseAddress!,
+                                 bytesPerRow: stripeBytes,
+                                 from: MTLRegion(origin: MTLOrigin(x: 0, y: y, z: 0),
+                                                 size: MTLSize(width: sampleWidth, height: 1, depth: 1)),
+                                 mipmapLevel: 0)
+            }
+            for b in stripe { hasher.combine(b) }
+        }
+        let hash = UInt64(bitPattern: Int64(hasher.finalize()))
+
+        if size == lastCursorSize && hotspot == lastCursorHotspot && hash == lastCursorHash {
+            return
+        }
+        lastCursorHash = hash
+        applyGuestCursor(from: cursor)
+    }
+
+    private func teardownSeamlessCursor(on display: CSDisplay?) {
+        for o in cursorObservations { o.invalidate() }
+        cursorObservations.removeAll()
+        cursorPollTimer?.invalidate()
+        cursorPollTimer = nil
+        display?.cursor?.isInhibited = false
+        metalView?.displayCursor = nil
+        lastCursorSize = .zero
+        lastCursorHotspot = .zero
+    }
+
+
+    private func applyGuestCursor(from cursor: CSCursor) {
+        let size = cursor.cursorSize
+        let hotspot = cursor.cursorHotspot
+        guard size.width > 0, size.height > 0,
+              let texture = cursor.texture else {
+            DispatchQueue.main.async { [weak self] in
+                self?.metalView?.displayCursor = nil
+            }
+            return
+        }
+        // Dedupe — KVO fires once per size + once per hotspot, but image
+        // construction is cheap so it's fine if we run twice.
+        lastCursorSize = size
+        lastCursorHotspot = hotspot
+
+        let w = Int(size.width)
+        let h = Int(size.height)
+        let bytesPerRow = w * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * h)
+        // The texture is BGRA8 premultiplied. Read on the main thread —
+        // SPICE channel callbacks fire on the main run loop in CocoaSpice
+        // so by the time KVO has notified us, the texture is settled.
+        pixels.withUnsafeMutableBytes { ptr in
+            texture.getBytes(ptr.baseAddress!,
+                             bytesPerRow: bytesPerRow,
+                             from: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
+                                             size: MTLSize(width: w, height: h, depth: 1)),
+                             mipmapLevel: 0)
+        }
+
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return }
+        let bitmapInfo = CGBitmapInfo(rawValue:
+            CGImageAlphaInfo.premultipliedFirst.rawValue |
+            CGBitmapInfo.byteOrder32Little.rawValue)
+        guard let cgImage = CGImage(width: w, height: h,
+                                    bitsPerComponent: 8,
+                                    bitsPerPixel: 32,
+                                    bytesPerRow: bytesPerRow,
+                                    space: CGColorSpaceCreateDeviceRGB(),
+                                    bitmapInfo: bitmapInfo,
+                                    provider: provider,
+                                    decode: nil,
+                                    shouldInterpolate: false,
+                                    intent: .defaultIntent) else { return }
+
+        // Treat the cursor texture as @2x for Retina. The guest delivers
+        // pixel-accurate cursors (64×64 typically); macOS renders NSImage
+        // size in *points*. Setting image.size = half the pixel dimensions
+        // makes macOS use the texture as the 2× backing, so the visible
+        // cursor lands at native macOS cursor size on Retina displays.
+        // Hotspot is in image-points → halve it too.
+        let scale: CGFloat = 2.0
+        let pointW = CGFloat(w) / scale
+        let pointH = CGFloat(h) / scale
+        let image = NSImage(cgImage: cgImage, size: NSSize(width: pointW, height: pointH))
+        let scaledHotspot = NSPoint(x: hotspot.x / scale, y: hotspot.y / scale)
+        let nsCursor = NSCursor(image: image, hotSpot: scaledHotspot)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.metalView?.displayCursor = nsCursor
+        }
+    }
+
     override func windowWillClose(_ notification: Notification) {
+        // Stop the render thread before tearing down the renderer —
+        // otherwise a tick mid-removeRenderer can call into a freed
+        // CSMetalRenderer.
+        stopBackgroundRender()
         vmDisplay?.removeRenderer(renderer!)
         stopAllCapture()
         if let screenChangedToken = screenChangedToken {
@@ -306,7 +604,11 @@ extension VMDisplayQemuMetalWindowController {
         let currentScreenScale = window.screen?.backingScaleFactor ?? 1.0
         let nativeScale = displayConfig!.isNativeResolution ? 1.0 : currentScreenScale
         let minScaledSize = CGSize(width: displaySize.width * nativeScale / currentScreenScale, height: displaySize.height * nativeScale / currentScreenScale)
-        guard let screenSize = window.screen?.visibleFrame.size else {
+        // In fullscreen, use the full screen frame (including the notch wings)
+        // rather than visibleFrame, which excludes the menu-bar/notch region.
+        // Pairs with NSPrefersDisplaySafeAreaCompatibilityMode=false in Info.plist.
+        let availableFrame = isFullScreen ? window.screen?.frame : window.screen?.visibleFrame
+        guard let screenSize = availableFrame?.size else {
             return minScaledSize
         }
         let excessSize = window.frameRect(forContentRect: .zero).size
@@ -349,7 +651,12 @@ extension VMDisplayQemuMetalWindowController {
         guard displaySize != .zero else { return frameSize }
         guard let vmDisplay = self.vmDisplay else { return frameSize }
         let currentScreenScale = window.screen?.backingScaleFactor ?? 1.0
-        let targetContentSize = window.contentRect(forFrameRect: CGRect(origin: .zero, size: frameSize)).size
+        // In fullscreen, use the raw frame size — `contentRect(forFrameRect:)`
+        // still subtracts toolbar height even when the toolbar is auto-hidden,
+        // which letterboxes the framebuffer (LR black bars from height-fit
+        // scaling). Outside fullscreen the toolbar is genuinely visible and
+        // contentRect is the right answer.
+        let targetContentSize = isFullScreen ? frameSize : window.contentRect(forFrameRect: CGRect(origin: .zero, size: frameSize)).size
         let targetScaleX = targetContentSize.width * currentScreenScale / displaySize.width
         let targetScaleY = targetContentSize.height * currentScreenScale / displaySize.height
         let targetScale = min(targetScaleX, targetScaleY)
@@ -419,13 +726,26 @@ extension VMDisplayQemuMetalWindowController {
     
     func windowDidEnterFullScreen(_ notification: Notification) {
         isFullScreen = true
+        // WingsAwareWindow.enterFakeFullScreen has already cleared
+        // contentAspectRatio/contentMinSize and resized the window to
+        // screen.frame. Re-run scaling now that isFullScreen is true so
+        // updateHostScaling uses the new (frame-not-contentRect) branch.
+        if let window = self.window, displaySize != .zero {
+            _ = updateHostScaling(for: window, frameSize: window.frame.size)
+        }
         if isFullScreenAutoCapture {
             captureMouse()
         }
     }
-    
+
     func windowDidExitFullScreen(_ notification: Notification) {
         isFullScreen = false
+        // Repopulate contentMinSize/contentAspectRatio from the guest's
+        // current resolution; WingsAwareWindow restored the pre-fullscreen
+        // values which may be stale if the guest resized during fullscreen.
+        if let vmDisplay = self.vmDisplay {
+            displaySizeDidChange(size: vmDisplay.displaySize, shouldSaveResolution: false)
+        }
         if isFullScreenAutoCapture {
             releaseMouse()
         }
@@ -435,7 +755,7 @@ extension VMDisplayQemuMetalWindowController {
         // Do not capture mouse if user did not clicked inside the metalView because the window will be draged if user hold the mouse button.
         guard let window = window,
               window.mouseLocationOutsideOfEventStream.y < metalView.frame.height,
-              captureMouseToolbarButton.state == .off,
+              (captureMouseToolbarButton?.state ?? .off) == .off,
               isWindowFocusAutoCapture else {
             return
         }
@@ -499,7 +819,7 @@ extension VMDisplayQemuMetalWindowController: VMMetalViewInputDelegate {
             self.qemuVM.requestInputTablet(false)
             self.metalView?.captureMouse()
             
-            self.captureMouseToolbarButton.state = .on
+            self.captureMouseToolbarButton?.state = .on
             
             let format = NSLocalizedString("Press %@ to release cursor", comment: "VMDisplayQemuMetalWindowController")
             let keys = NSLocalizedString(self.shouldUseCmdOptForCapture ? "⌘+⌥" : "⌃+⌥", comment: "VMDisplayQemuMetalWindowController")
@@ -535,7 +855,7 @@ extension VMDisplayQemuMetalWindowController: VMMetalViewInputDelegate {
         syncCapsLock()
         qemuVM.requestInputTablet(true)
         metalView?.releaseMouse()
-        self.captureMouseToolbarButton.state = .off
+        self.captureMouseToolbarButton?.state = .off
         self.window?.subtitle = defaultSubtitle
     }
     
@@ -731,5 +1051,112 @@ extension VMDisplayQemuMetalWindowController {
         let sheetWindow = NSWindow(contentViewController: content)
         sheetWindow.setContentSize(fittingSize)
         window.beginSheet(sheetWindow)
+    }
+}
+
+// Custom NSWindow class declared as customClass on VMDisplayWindow.xib.
+//
+// Native AppKit fullscreen hosts the window's contentView in a managed
+// compositing container that's sized to visibleFrame regardless of
+// window.frame, with no public API to override. On a 16" MBP that means
+// the menu-bar/notch-wings region (~33pt at the top) is permanently
+// unreachable from the guest framebuffer.
+//
+// Instead of relying on native fullscreen, override toggleFullScreen to
+// implement "fake fullscreen": .borderless styleMask, frame = screen.frame,
+// auto-hide menu bar + dock. We fire windowDidEnter/ExitFullScreen on the
+// delegate manually so the controller's fullscreen lifecycle (isFullScreen
+// flag, mouse capture, scaling re-calc) runs unchanged.
+@objc(WingsAwareWindow)
+class WingsAwareWindow: NSWindow {
+    private var savedFrame: NSRect = .zero
+    private var savedStyleMask: NSWindow.StyleMask = []
+    private var savedPresentationOptions: NSApplication.PresentationOptions = []
+    private var savedContentAspectRatio: NSSize = .zero
+    private var savedContentMinSize: NSSize = .zero
+    private var savedBackgroundColor: NSColor?
+    private var savedHasShadow: Bool = true
+    private(set) var isFakeFullScreen: Bool = false
+
+    // Borderless windows can't accept key/main without these overrides.
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func toggleFullScreen(_ sender: Any?) {
+        if isFakeFullScreen {
+            exitFakeFullScreen()
+        } else {
+            enterFakeFullScreen()
+        }
+    }
+
+    private func enterFakeFullScreen() {
+        guard let screen = self.screen else { return }
+        savedFrame = self.frame
+        savedStyleMask = self.styleMask
+        savedPresentationOptions = NSApp.presentationOptions
+        savedContentAspectRatio = self.contentAspectRatio
+        savedContentMinSize = self.contentMinSize
+        savedBackgroundColor = self.backgroundColor
+        savedHasShadow = self.hasShadow
+
+        // updateHostFrame leaves contentAspectRatio/contentMinSize set to
+        // the guest's resolution; setFrame(screen.frame) on a constrained
+        // window asserts in _adjustNeedsDisplayRegionForNewFrame.
+        self.contentAspectRatio = .zero
+        self.contentMinSize = .zero
+
+        self.styleMask = [.borderless, .resizable]
+        // Black backing so any subpixel-alignment gap doesn't expose the
+        // default light-grey window backing.
+        self.backgroundColor = .black
+        // The window shadow's inner edge bleeds 1-2px onto screen pixels
+        // when the frame == screen.frame; visible as a grey halo.
+        self.hasShadow = false
+        // .hideMenuBar / .hideDock keep them fully hidden — no reveal
+        // when the cursor hits the top/bottom edge. .autoHide* would
+        // pop them out and break the wings-edge-to-edge illusion when
+        // the user nudges the cursor against an edge. Allowed here
+        // because our window isn't in native .fullScreen styleMask
+        // (which would forbid .hideDock); we use borderless instead.
+        NSApp.presentationOptions = [.hideMenuBar, .hideDock]
+        super.setFrame(screen.frame, display: true)
+        self.makeKeyAndOrderFront(nil)
+        isFakeFullScreen = true
+
+        let n = Notification(name: NSWindow.didEnterFullScreenNotification, object: self)
+        (delegate as? NSWindowDelegate)?.windowDidEnterFullScreen?(n)
+    }
+
+    private func exitFakeFullScreen() {
+        let n = Notification(name: NSWindow.didExitFullScreenNotification, object: self)
+        (delegate as? NSWindowDelegate)?.windowDidExitFullScreen?(n)
+
+        NSApp.presentationOptions = savedPresentationOptions
+        self.styleMask = savedStyleMask
+        self.backgroundColor = savedBackgroundColor
+        self.hasShadow = savedHasShadow
+        super.setFrame(savedFrame, display: true)
+        self.contentAspectRatio = savedContentAspectRatio
+        self.contentMinSize = savedContentMinSize
+        isFakeFullScreen = false
+    }
+
+    // Force any setFrame call while in fake-fullscreen to stay at
+    // screen.frame so external resizes don't shrink us.
+    override func setFrame(_ frameRect: NSRect, display flag: Bool, animate animateFlag: Bool) {
+        var rect = frameRect
+        if isFakeFullScreen, let screen = self.screen {
+            rect = screen.frame
+        }
+        super.setFrame(rect, display: flag, animate: animateFlag)
+    }
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        var rect = frameRect
+        if isFakeFullScreen, let screen = self.screen {
+            rect = screen.frame
+        }
+        super.setFrame(rect, display: flag)
     }
 }

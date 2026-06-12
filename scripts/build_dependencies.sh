@@ -117,7 +117,11 @@ download () {
     fi
     if [ -d "$DATA" ]; then
         echo "${GREEN}Patching data ${NAME}...${NC}"
-        cp -r "$DATA/" "$DIR"
+        # `cp -r src/. dst` rather than `cp -r src/ dst`: BSD cp on macOS
+        # ignores the trailing slash on source, so `src/` ends up nested
+        # AS a subdir of dst instead of having its contents merged.
+        # `src/.` works correctly under both BSD and GNU cp.
+        cp -r "$DATA/." "$DIR"
     fi
 }
 
@@ -199,8 +203,25 @@ copy_private_headers() {
     fi
     echo "${GREEN}Copying private headers...${NC}"
     mkdir -p "$OUTPUT_INCLUDES"
-    cp -r "$IOKIT_HEADERS_PATH" "$OUTPUT_INCLUDES/IOKit"
-    rm "$OUTPUT_INCLUDES/IOKit/storage/IOMedia.h" # needed to pass QEMU check
+    # -L: dereference the source symlink. In macOS 26 SDK,
+    # IOKit.framework/Headers is itself a symlink (-> Versions/Current/Headers).
+    # Without -L the destination becomes a broken symlink and the sed -i
+    # passes below get an empty file list ("sed: -I or -i may not be used
+    # with stdin").
+    cp -rL "$IOKIT_HEADERS_PATH" "$OUTPUT_INCLUDES/IOKit"
+    # IOMedia.h needs to disappear so QEMU's autodetect skips its IOMedia
+    # codepath. Apple removed the header outright in the macOS 26 SDK, so
+    # `rm` without -f trips on builds against newer SDKs.
+    rm -f "$OUTPUT_INCLUDES/IOKit/storage/IOMedia.h"
+    # IOPMLibDefs.h gained `enum IOPMUserClientNotificationType` in the
+    # macOS 26 SDK. When UTM's Swift target builds the IOKit module, the
+    # framework version is included via Headers/pwr_mgt/IOPMLibDefs.h, AND
+    # our sysroot copy is included via <IOKit/pwr_mgt/IOPMLibDefs.h> off
+    # IOPMLib.h. clang then sees the enum twice and errors with
+    # "redefinition of 'IOPMUserClientNotificationType'". Dropping our
+    # copy makes the angle-bracket include fall through to the framework
+    # version, dedup'ing the enum.
+    rm -f "$OUTPUT_INCLUDES/IOKit/pwr_mgt/IOPMLibDefs.h"
     # patch headers
     LC_ALL=C sed -i '' -e 's/#if KERNEL_USER32/#if 0/g' $(find "$OUTPUT_INCLUDES/IOKit" -type f)
     LC_ALL=C sed -i '' -e 's/#if !KERNEL_USER32/#if 1/g' $(find "$OUTPUT_INCLUDES/IOKit" -type f)
@@ -621,6 +642,11 @@ build_angle () {
     export PATH="$(realpath "$BUILD_DIR/depot_tools.git"):$OLD_PATH"
     pwd="$(pwd)"
     cd "$BUILD_DIR/WebKit.git/Source/ThirdParty/ANGLE"
+    # GCC_TREAT_WARNINGS_AS_ERRORS=NO: WebKit's vendored ANGLE pins to a
+    # commit that predates several clang warnings now enabled by default
+    # (e.g. virtual dtor on a `final` class) — building with -Werror
+    # against macOS 26 SDK / clang 17+ stalls on those. We're consuming
+    # ANGLE as a binary, not maintaining it, so demote -Werror.
     env -i PATH=$PATH xcodebuild archive -archivePath "ANGLE" \
                                          -scheme "ANGLE" \
                                          -sdk $SDK \
@@ -629,6 +655,7 @@ build_angle () {
                                          WEBCORE_LIBRARY_DIR="/usr/local/lib" \
                                          NORMAL_UMBRELLA_FRAMEWORKS_DIR="" \
                                          CODE_SIGNING_ALLOWED=NO \
+                                         GCC_TREAT_WARNINGS_AS_ERRORS=NO \
                                          IPHONEOS_DEPLOYMENT_TARGET="14.0" \
                                          MACOSX_DEPLOYMENT_TARGET="11.0" \
                                          XROS_DEPLOYMENT_TARGET="1.0"
@@ -777,10 +804,21 @@ build_mesa_host () {
 
 build_vulkan_drivers () {
     mkdir -p "$PREFIX/share/vulkan/icd.d"
-    build_mesa_host
-    meson_darwin_build $MESA_REPO -Dmesa-clc=system -Dgallium-drivers= -Dvulkan-drivers=kosmickrisp -Dplatforms=macos
-    patch_vulkan_icd "$PREFIX/share/vulkan/icd.d/kosmickrisp_mesa_icd.$ARCH.json"
-    mv "$PREFIX/share/vulkan/icd.d/kosmickrisp_mesa_icd.$ARCH.json" "$PREFIX/share/vulkan/icd.d/kosmickrisp_mesa_icd.json"
+    # Mesa's kosmickrisp Vulkan driver is temporarily disabled here.
+    # mesa-clc (used by build_mesa_host) does not compile against LLVM 22+
+    # because of API changes — clang::driver::Driver::GetResourcesPath was
+    # moved out of the Driver class, and OffloadArch::UNUSED collides with
+    # mesa's `#define UNUSED __attribute__((unused))` macro. UTM CI built
+    # against an older LLVM (18-ish) so it never hit this.
+    #
+    # MoltenVK alone provides a working Vulkan-on-Metal path; kosmickrisp
+    # is a faster alternative but optional. Re-enable once mesa is bumped
+    # to a commit that knows about modern clang/LLVM, or once we pin the
+    # mesa build to llvm@19 explicitly.
+    #build_mesa_host
+    #meson_darwin_build $MESA_REPO -Dmesa-clc=system -Dgallium-drivers= -Dvulkan-drivers=kosmickrisp -Dplatforms=macos
+    #patch_vulkan_icd "$PREFIX/share/vulkan/icd.d/kosmickrisp_mesa_icd.$ARCH.json"
+    #mv "$PREFIX/share/vulkan/icd.d/kosmickrisp_mesa_icd.$ARCH.json" "$PREFIX/share/vulkan/icd.d/kosmickrisp_mesa_icd.json"
     build_moltenvk
     patch_vulkan_icd "$PREFIX/share/vulkan/icd.d/MoltenVK_icd.json"
 }
@@ -977,7 +1015,13 @@ macos )
     SDK=macosx
     CFLAGS_TARGET="-target $ARCH-apple-macos$SDKMINVER"
     PLATFORM_FAMILY_NAME="macOS"
-    QEMU_PLATFORM_BUILD_FLAGS="--enable-shared-lib --disable-cocoa --cpu=$CPU"
+    # --disable-sdl: when shared-lib QEMU is auto-configured with SDL2
+    # (because Homebrew has sdl2 installed as a transitive dep), ui/sdl2.c
+    # references the `qemu_main` entry point which the loader app (UTM)
+    # is supposed to provide. UTM uses its own Cocoa/SPICE display path
+    # and never satisfies that reference, so the linker fails. Disable
+    # SDL outright.
+    QEMU_PLATFORM_BUILD_FLAGS="--enable-shared-lib --disable-cocoa --disable-sdl --cpu=$CPU"
     ;;
 * )
     usage

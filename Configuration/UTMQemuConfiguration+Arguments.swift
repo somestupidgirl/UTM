@@ -207,6 +207,20 @@ import Virtualization // for getting network interfaces
             "streaming-video=filter"
         }
         "gl=\(glBackend)"
+        // Disable agent-mediated mouse mode. When the guest's
+        // spice-vdagent is running and announces mouse capability,
+        // SPICE switches into agent-mouse mode and routes pointer
+        // events through the agent path. That path wedges under
+        // sustained guest GPU load (chrome / vscode rendering at
+        // 120fps in a Wayland compositor): events queue but stop
+        // arriving at /dev/input. Keyboard, clipboard, file transfer
+        // continue to work because they're on different SPICE
+        // channels / code paths. With agent-mouse=off the SPICE
+        // server ignores the agent's mouse advertisement and always
+        // uses direct injection into the configured input devices
+        // (usb-tablet for absolute positioning) — which is rock
+        // solid under any guest load.
+        "agent-mouse=off"
         f()
         f("-chardev")
         if isRemoteSpice {
@@ -823,6 +837,14 @@ import Virtualization // for getting network interfaces
             bootindex += 1
             f()
         } else if drive.interface == .virtio {
+            // iothread must be declared before the virtio-blk device that
+            // references it — QEMU parses args sequentially.
+            if drive.iothread {
+                f("-object")
+                "iothread"
+                "id=iothread-\(drive.id)"
+                f()
+            }
             f("-device")
             if system.architecture == .s390x {
                 "virtio-blk-ccw"
@@ -833,6 +855,9 @@ import Virtualization // for getting network interfaces
             }
             "drive=drive\(drive.id)"
             "serial=\(drive.serial)"
+            if drive.iothread {
+                "iothread=iothread-\(drive.id)"
+            }
             if !disableBootIndex {
                 "bootindex=\(bootindex)"
             }
@@ -927,6 +952,12 @@ import Virtualization // for getting network interfaces
             "discard=unmap"
             "detect-zeroes=unmap"
         }
+        if drive.cache != .default {
+            "cache=\(drive.cache.rawValue)"
+        }
+        if drive.aio != .threads {
+            "aio=\(drive.aio.rawValue)"
+        }
         if !isUseFileLock && (!isCd || drive.imageURL != nil) {
             "file.locking=off"
         }
@@ -940,15 +971,37 @@ import Virtualization // for getting network interfaces
         } else {
             f("-usb")
         }
+        // On `virt` (aarch64) machines, use virtio-input devices instead
+        // of usb-kbd/usb-tablet/usb-mouse. usb-kbd's USB-HID descriptor
+        // sets bInterval = 7 (= 2^(7-1) * 125us = 8 ms — verified in
+        // QEMU's hw/usb/dev-hid.c). The xHCI host controller polls the
+        // device at that interval, so each keystroke waits 0-8ms (avg
+        // 4ms) for the next poll before reaching the guest. usb-tablet
+        // uses bInterval=4 (1ms) which is fine, but moving everything
+        // to virtio-input keeps the input path consistent: virtio uses
+        // a virtqueue with no polling at all, just an event-driven
+        // notification.
+        //
+        // Other targets keep usb-* — virtio-input requires a virtio
+        // bus, which legacy machines (PC-compat, classic Macs) don't
+        // expose. The `virt` aarch64 machine type does.
+        let useVirtioInput = system.target.rawValue.hasPrefix("virt")
         if !isClassicMacNewWorld {
             f("-device")
-            f("usb-tablet,bus=usb-bus.0")
+            f(useVirtioInput ? "virtio-tablet-pci" : "usb-tablet,bus=usb-bus.0")
         }
         if !qemu.hasPS2Controller {
-            f("-device")
-            f("usb-mouse,bus=usb-bus.0")
-            f("-device")
-            f("usb-kbd,bus=usb-bus.0")
+            if useVirtioInput {
+                f("-device")
+                f("virtio-mouse-pci")
+                f("-device")
+                f("virtio-keyboard-pci")
+            } else {
+                f("-device")
+                f("usb-mouse,bus=usb-bus.0")
+                f("-device")
+                f("usb-kbd,bus=usb-bus.0")
+            }
         }
         #if WITH_USB
         let maxDevices = input.maximumUsbShare
