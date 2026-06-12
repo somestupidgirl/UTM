@@ -20,10 +20,17 @@
     }
 
     var data: UTMData?
-    
+
     @Setting("KeepRunningAfterLastWindowClosed") private var isKeepRunningAfterLastWindowClosed: Bool = false
     @Setting("HideDockIcon") private var isDockIconHidden: Bool = false
     @Setting("NoQuitConfirmation") private var isNoQuitConfirmation: Bool = false
+    @Setting("PauseOnSleep") private var isPauseOnSleep: Bool = true
+
+    /// IDs of VMs that were running when the host went to sleep and were auto-paused.
+    /// Only these VMs will be auto-resumed on wake — VMs the user paused manually are not touched.
+    private var sleepPausedVMIds: Set<UUID> = []
+    private var sleepObserver: Any?
+    private var wakeObserver: Any?
     
     private var runningVirtualMachines: [VMData] {
         guard let vmList = data?.vmWindows.keys else {
@@ -149,7 +156,50 @@
         }
     }
     
+    // MARK: - Sleep / wake
+
+    private func registerSleepWakeObservers() {
+        let nc = NSWorkspace.shared.notificationCenter
+        sleepObserver = nc.addObserver(forName: NSWorkspace.willSleepNotification,
+                                       object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleSystemWillSleep() }
+        }
+        wakeObserver = nc.addObserver(forName: NSWorkspace.didWakeNotification,
+                                      object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleSystemDidWake() }
+        }
+    }
+
+    private func handleSystemWillSleep() {
+        guard isPauseOnSleep, let data = data else { return }
+        sleepPausedVMIds = []
+        for vm in data.vmWindows.keys {
+            guard let wrapped = vm.wrapped, wrapped.state == .started else { continue }
+            wrapped.requestVmPause(save: false)
+            sleepPausedVMIds.insert(vm.id)
+        }
+        logger.debug("Sleep: paused \(self.sleepPausedVMIds.count) VM(s)")
+    }
+
+    private func handleSystemDidWake() {
+        guard isPauseOnSleep, !sleepPausedVMIds.isEmpty, let data = data else { return }
+        for vm in data.vmWindows.keys {
+            guard sleepPausedVMIds.contains(vm.id),
+                  let wrapped = vm.wrapped,
+                  wrapped.state == .paused else { continue }
+            wrapped.requestVmResume()
+        }
+        logger.debug("Wake: resumed \(self.sleepPausedVMIds.count) VM(s)")
+        sleepPausedVMIds = []
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        if let sleepObserver = sleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver)
+        }
+        if let wakeObserver = wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
         /// Synchronize registry
         UTMRegistry.shared.sync()
         /// Clean up caches
@@ -172,6 +222,7 @@
         if isDockIconHidden {
             NSApp.setActivationPolicy(.accessory)
         }
+        registerSleepWakeObservers()
     }
     
     func application(_ sender: NSApplication, delegateHandlesKey key: String) -> Bool {

@@ -48,11 +48,12 @@ class VMDisplayAppleWindowController: VMDisplayWindowController {
     @Setting("SharePathAlertShown") private var isSharePathAlertShownPersistent: Bool = false
     
     override func windowDidLoad() {
-        mainView!.translatesAutoresizingMaskIntoConstraints = false
-        displayView.addSubview(mainView!)
-        NSLayoutConstraint.activate(mainView!.constraintsForAnchoringTo(boundsOf: displayView))
+        guard let mainView = mainView else { return }
+        mainView.translatesAutoresizingMaskIntoConstraints = false
+        displayView.addSubview(mainView)
+        NSLayoutConstraint.activate(mainView.constraintsForAnchoringTo(boundsOf: displayView))
         appleVM.screenshotDelegate = self
-        window!.recalculateKeyViewLoop()
+        window?.recalculateKeyViewLoop()
         if #available(macOS 12, *) {
             shouldAutoStartVM = appleConfig.system.boot.macRecoveryIpswURL == nil
         }
@@ -80,8 +81,8 @@ class VMDisplayAppleWindowController: VMDisplayWindowController {
     }
     
     override func enterLive() {
-        window!.title = defaultTitle
-        window!.subtitle = defaultSubtitle
+        window?.title = defaultTitle
+        window?.subtitle = defaultSubtitle
         updateWindowFrame()
         super.enterLive()
         setControl([.drives, .usb, .resize, .keyboardShortcut], isEnabled: false)
@@ -127,11 +128,12 @@ class VMDisplayAppleWindowController: VMDisplayWindowController {
             return
         }
         if !isSharePathAlertShownOnce && !isSharePathAlertShownPersistent {
+            guard let window = window else { return }
             let alert = NSAlert()
             alert.messageText = NSLocalizedString("Directory sharing", comment: "VMDisplayAppleWindowController")
             alert.informativeText = NSLocalizedString("To access the shared directory, the guest OS must have Virtiofs drivers installed. You can then run `sudo mount -t virtiofs share /path/to/share` to mount to the share path.", comment: "VMDisplayAppleWindowController")
             alert.showsSuppressionButton = true
-            alert.beginSheetModal(for: window!) { _ in
+            alert.beginSheetModal(for: window) { _ in
                 if alert.suppressionButton?.state ?? .off == .on {
                     self.isSharePathAlertShownPersistent = true
                 }
@@ -146,7 +148,7 @@ class VMDisplayAppleWindowController: VMDisplayWindowController {
     
     override func virtualMachine(_ vm: any UTMVirtualMachine, didCompleteInstallation success: Bool) {
         Task { @MainActor in
-            self.window!.subtitle = ""
+            self.window?.subtitle = ""
             if success {
                 // delete IPSW setting
                 self.enterSuspended(isBusy: true)
@@ -161,7 +163,7 @@ class VMDisplayAppleWindowController: VMDisplayWindowController {
         Task { @MainActor in
             let installationFormat = NSLocalizedString("Installation: %@", comment: "VMDisplayAppleWindowController")
             let percentString = NumberFormatter.localizedString(from: progress as NSNumber, number: .percent)
-            self.window!.subtitle = String.localizedStringWithFormat(installationFormat, percentString)
+            self.window?.subtitle = String.localizedStringWithFormat(installationFormat, percentString)
         }
     }
 }
@@ -251,11 +253,12 @@ extension VMDisplayAppleWindowController {
     }
     
     func pickShare(_ onComplete: @escaping (URL) -> Void) {
+        guard let window = window else { return }
         let openPanel = NSOpenPanel()
         openPanel.title = NSLocalizedString("Select Shared Folder", comment: "VMDisplayAppleWindowController")
         openPanel.canChooseDirectories = true
         openPanel.canChooseFiles = false
-        openPanel.beginSheetModal(for: window!) { response in
+        openPanel.beginSheetModal(for: window) { response in
             guard response == .OK else {
                 return
             }
@@ -342,11 +345,12 @@ extension VMDisplayAppleWindowController {
 
     @available(macOS 15, *)
     func openDriveImage(forDriveIndex index: Int) {
+        guard let window = window else { return }
         let drive = appleConfig.drives[index]
         let openPanel = NSOpenPanel()
         openPanel.title = NSLocalizedString("Select Drive Image", comment: "VMDisplayWindowController")
         openPanel.allowedContentTypes = [.data]
-        openPanel.beginSheetModal(for: window!) { response in
+        openPanel.beginSheetModal(for: window) { response in
             guard response == .OK else {
                 return
             }
@@ -489,8 +493,12 @@ fileprivate extension NSView {
     ///
     /// - Returns: `NSImage` of view
     func image() -> NSImage {
-        let imageRepresentation = bitmapImageRepForCachingDisplay(in: bounds)!
+        guard !bounds.isEmpty,
+              let imageRepresentation = bitmapImageRepForCachingDisplay(in: bounds),
+              let cgImage = imageRepresentation.cgImage else {
+            return NSImage()
+        }
         cacheDisplay(in: bounds, to: imageRepresentation)
-        return NSImage(cgImage: imageRepresentation.cgImage!, size: bounds.size)
+        return NSImage(cgImage: cgImage, size: bounds.size)
     }
 }

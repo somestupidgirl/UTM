@@ -119,8 +119,8 @@ struct VMToolbarView: View {
                         Label("Restart", systemImage: "restart")
                     }.animationUniqueID("restart", in: namespace)
                     Button {
-                        if case .serial(_, _) = state.device {
-                            let template = session.qemuConfig.serials[state.device!.configIndex].terminal?.resizeCommand
+                        if case .serial(_, let idx) = state.device {
+                            let template = session.qemuConfig.serials[idx].terminal?.resizeCommand
                             state.toggleDisplayResize(command: template)
                         } else {
                             state.toggleDisplayResize()
@@ -459,11 +459,13 @@ extension MenuStyle where Self == ToolbarMenuStyle {
             task.cancel()
         }
         setIsUserInteracting(true)
-        longIdleTask = DispatchWorkItem {
+        let task = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
             self.longIdleTask = nil
             self.setIsUserInteracting(false)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: longIdleTask!)
+        longIdleTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: task)
     }
 }
 

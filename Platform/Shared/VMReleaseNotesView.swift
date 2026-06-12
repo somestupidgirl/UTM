@@ -81,9 +81,7 @@ struct VMReleaseNotesView: View {
         .frame(width: 450, height: 450)
         #endif
         .onAppear {
-            if helper.releaseNotes.count == 0 {
-                isShowAll = true
-            } else if helper.releaseNotes.first!.body.count == 0 {
+            if helper.releaseNotes.isEmpty || helper.releaseNotes.first?.body.isEmpty == true {
                 isShowAll = true
             }
         }

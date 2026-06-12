@@ -82,6 +82,7 @@ struct VMKeyboardShortcutsView: View {
         }
         .sheet(isPresented: $isEditing, onDismiss: {
             if let index = currentlyEditingIndex {
+                guard index.id < keyboardShortcuts.count else { return }
                 if !currentlyEditingShortcut.isEmpty {
                     keyboardShortcuts[index.id] = currentlyEditingShortcut
                 } else {

@@ -40,6 +40,7 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
     private let resizeTimeoutSecs: Double = 5
     private var debounceResize: DispatchWorkItem?
     private var cancelResize: DispatchWorkItem?
+    private var pendingDisplaySizeChange: DispatchWorkItem?
     
     private var localEventMonitor: Any? = nil
     private var globalEventMonitor: Any? = nil
@@ -70,6 +71,11 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
     @Setting("IsNumLockForced") private var isNumLockForced: Bool = false
     @Setting("InvertScroll") private var isInvertScroll: Bool = false
     @Setting("QEMURendererFPSLimit") private var rendererFpsLimit: Int = 0
+    @Setting("QEMUShowFPSOverlay") private var showFPSOverlay: Bool = false
+
+    private var fpsOverlayLabel: NSTextField?
+    private var fpsTimer: Timer?
+    private var fpsLastRenderCount: Int = 0
     
     // MARK: - Init
     
@@ -96,15 +102,29 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
             logger.critical("Failed to create renderer.")
             return
         }
-        if rendererFpsLimit > 0 {
-            metalView.preferredFramesPerSecond = rendererFpsLimit
-        } else if #available(macOS 12, *), let maxFps = self.window?.screen?.maximumFramesPerSecond {
-            metalView.preferredFramesPerSecond = maxFps
-        }
+        
+        let label = NSTextField(labelWithString: "")
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .white
+        label.backgroundColor = NSColor.black.withAlphaComponent(0.55)
+        label.isBezeled = false
+        label.isEditable = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        metalView.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: metalView.topAnchor, constant: 4),
+            label.trailingAnchor.constraint(equalTo: metalView.trailingAnchor, constant: -4),
+        ])
+        fpsOverlayLabel = label
+
+        updatePreferredFrameRate()
+
         renderer.changeUpscaler(displayConfig?.upscalingFilter.metalSamplerMinMagFilter ?? .linear, downscaler: displayConfig?.downscalingFilter.metalSamplerMinMagFilter ?? .linear)
         vmDisplay?.addRenderer(renderer) // can be nil if primary
         metalView.delegate = renderer
         metalView.inputDelegate = self
+        metalView.dragDelegate = self
+        metalView.registerForDraggedFiles()
 
         screenChangedToken = NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: nil, queue: .main) { [weak self] _ in
             // update minSize when we change screens
@@ -114,6 +134,7 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
                !isDisplaySizeDynamic {
                 window.contentMinSize = contentMinSize(in: window, for: displaySize)
             }
+            self?.updatePreferredFrameRate()
         }
 
         if isSecondary && isDisplaySizeDynamic, let window = window {
@@ -126,6 +147,7 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
     override func windowWillClose(_ notification: Notification) {
         vmDisplay?.removeRenderer(renderer!)
         stopAllCapture()
+        stopFPSTimer()
         if let screenChangedToken = screenChangedToken {
             NotificationCenter.default.removeObserver(screenChangedToken)
         }
@@ -135,8 +157,9 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
     
     override func enterLive() {
         metalView.isHidden = false
+        metalView.isPaused = false
         screenshotView.isHidden = true
-        if vmQemuConfig!.sharing.hasClipboardSharing {
+        if vmQemuConfig?.sharing.hasClipboardSharing == true {
             UTMPasteboard.general.requestPollingMode(forHashable: self) // start clipboard polling
         }
         // monitor Cmd+Q and Cmd+W and capture them if needed
@@ -158,18 +181,25 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
         if let vmDisplay = vmDisplay {
             displaySizeDidChange(size: vmDisplay.displaySize)
         }
+        startFPSTimer()
         super.enterLive()
         setControl(.resize, isEnabled: false) // disable item
         if isWindowFocusAutoCapture {
             captureMouse()
+        } else {
+            // Claim first responder immediately so keyboard events reach the
+            // guest without requiring the user to engage mouse capture first.
+            window?.makeFirstResponder(metalView)
         }
     }
     
     override func enterSuspended(isBusy busy: Bool) {
         if !busy {
+            metalView.isPaused = true
             metalView.isHidden = true
             screenshotView.image = vm.screenshot?.image
             screenshotView.isHidden = false
+            stopFPSTimer()
         }
         if vm.state == .stopped {
             vmDisplay = nil
@@ -181,7 +211,7 @@ class VMDisplayQemuMetalWindowController: VMDisplayQemuWindowController {
     }
 
     private func stopAllCapture() {
-        if vmQemuConfig!.sharing.hasClipboardSharing {
+        if vmQemuConfig?.sharing.hasClipboardSharing == true {
             UTMPasteboard.general.releasePollingMode(forHashable: self) // stop clipboard polling
         }
         if let localEventMonitor = self.localEventMonitor {
@@ -228,8 +258,8 @@ extension VMDisplayQemuMetalWindowController {
     override func spiceDidDestroyDisplay(_ display: CSDisplay) {
         if vmDisplay == display {
             if isSecondary {
-                DispatchQueue.main.async {
-                    self.close()
+                DispatchQueue.main.async { [weak self] in
+                    self?.close()
                 }
             } else {
                 vmDisplay = nil
@@ -250,15 +280,15 @@ extension VMDisplayQemuMetalWindowController {
     }
     
     override func spiceDynamicResolutionSupportDidChange(_ supported: Bool) {
-        guard displayConfig!.isDynamicResolution else {
+        guard displayConfig?.isDynamicResolution == true else {
             super.spiceDynamicResolutionSupportDidChange(supported)
             return
         }
         if isDisplaySizeDynamic != supported {
             displaySizeDidChange(size: displaySize, shouldSaveResolution: false)
-            DispatchQueue.main.async {
-                if supported, let window = self.window {
-                    self.restoreDynamicResolution(for: window)
+            DispatchQueue.main.async { [weak self] in
+                if supported, let window = self?.window {
+                    self?.restoreDynamicResolution(for: window)
                 }
             }
         }
@@ -277,7 +307,9 @@ extension VMDisplayQemuMetalWindowController {
             logger.debug("Ignoring zero size display")
             return
         }
-        DispatchQueue.main.async {
+        pendingDisplaySizeChange?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
             logger.debug("resizing to: (\(size.width), \(size.height))")
             guard let window = self.window else {
                 logger.debug("Invalid window, ignoring size change")
@@ -293,18 +325,62 @@ extension VMDisplayQemuMetalWindowController {
                 self.saveDynamicResolution()
             }
         }
+        pendingDisplaySizeChange = work
+        DispatchQueue.main.async(execute: work)
     }
     
     func windowDidChangeScreen(_ notification: Notification) {
         logger.debug("screen changed")
+        updatePreferredFrameRate()
         if let vmDisplay = self.vmDisplay {
             displaySizeDidChange(size: vmDisplay.displaySize)
         }
     }
 
+    private func updatePreferredFrameRate() {
+        guard rendererFpsLimit <= 0 else {
+            metalView.preferredFramesPerSecond = rendererFpsLimit
+            return
+        }
+        if #available(macOS 12, *) {
+            // window?.screen may be nil at windowDidLoad time — fall back to
+            // the main screen so we at least get ProMotion on first render,
+            // then the screenChangedToken notification corrects it if needed
+            let screen = window?.screen ?? NSScreen.main
+            if let maxFps = screen?.maximumFramesPerSecond {
+                metalView.preferredFramesPerSecond = maxFps
+                logger.debug("Set preferredFramesPerSecond to \(maxFps)")
+            }
+        }
+    }
+
+    private func startFPSTimer() {
+        stopFPSTimer()
+        fpsLastRenderCount = metalView.renderFrameCount
+        fpsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let count = self.metalView.renderFrameCount
+            let fps = count - self.fpsLastRenderCount
+            self.fpsLastRenderCount = count
+            guard let label = self.fpsOverlayLabel else { return }
+            if self.showFPSOverlay {
+                label.stringValue = " FPS: \(fps) "
+                label.isHidden = false
+            } else {
+                label.isHidden = true
+            }
+        }
+    }
+
+    private func stopFPSTimer() {
+        fpsTimer?.invalidate()
+        fpsTimer = nil
+        fpsOverlayLabel?.isHidden = true
+    }
+
     private func contentMinSize(in window: NSWindow, for displaySize: CGSize) -> CGSize {
         let currentScreenScale = window.screen?.backingScaleFactor ?? 1.0
-        let nativeScale = displayConfig!.isNativeResolution ? 1.0 : currentScreenScale
+        let nativeScale = displayConfig?.isNativeResolution == true ? 1.0 : currentScreenScale
         let minScaledSize = CGSize(width: displaySize.width * nativeScale / currentScreenScale, height: displaySize.height * nativeScale / currentScreenScale)
         guard let screenSize = window.screen?.visibleFrame.size else {
             return minScaledSize
@@ -321,9 +397,9 @@ extension VMDisplayQemuMetalWindowController {
         guard let window = window else { return }
         guard let vmDisplay = vmDisplay else { return }
         let currentScreenScale = window.screen?.backingScaleFactor ?? 1.0
-        let nativeScale = displayConfig!.isNativeResolution ? 1.0 : currentScreenScale
+        let nativeScale = displayConfig?.isNativeResolution == true ? 1.0 : currentScreenScale
         // change optional scale if needed
-        if isDisplaySizeDynamic || (!displayConfig!.isNativeResolution && renderer.viewportScale < currentScreenScale) {
+        if isDisplaySizeDynamic || (displayConfig?.isNativeResolution != true && renderer.viewportScale < currentScreenScale) {
             renderer.viewportScale = nativeScale
         }
         let fullContentWidth = size.width * renderer.viewportScale / currentScreenScale
@@ -363,9 +439,9 @@ extension VMDisplayQemuMetalWindowController {
     fileprivate func updateGuestResolution(for window: NSWindow, frameSize: NSSize) -> NSSize {
         guard let vmDisplay = self.vmDisplay else { return frameSize }
         let currentScreenScale = window.screen?.backingScaleFactor ?? 1.0
-        let nativeScale = displayConfig!.isNativeResolution ? currentScreenScale : 1.0
+        let nativeScale = displayConfig?.isNativeResolution == true ? currentScreenScale : 1.0
         let targetSize = window.contentRect(forFrameRect: CGRect(origin: .zero, size: frameSize)).size
-        let targetSizeScaled = displayConfig!.isNativeResolution ? targetSize.applying(CGAffineTransform(scaleX: nativeScale, y: nativeScale)) : targetSize
+        let targetSizeScaled = displayConfig?.isNativeResolution == true ? targetSize.applying(CGAffineTransform(scaleX: nativeScale, y: nativeScale)) : targetSize
         logger.debug("Requesting resolution: (\(targetSizeScaled.width), \(targetSizeScaled.height))")
         let bounds = CGRect(origin: .zero, size: targetSizeScaled)
         vmDisplay.requestResolution(bounds)
@@ -389,8 +465,8 @@ extension VMDisplayQemuMetalWindowController {
             return
         }
         debounceResize?.cancel()
-        debounceResize = DispatchWorkItem {
-            self._handleResizeEnd(for: window)
+        debounceResize = DispatchWorkItem { [weak self] in
+            self?._handleResizeEnd(for: window)
         }
         // when resizing with a mouse drag, we get flooded with this notification
         // when using accessibility APIs, we do not get a `windowDidEndLiveResize` notification
@@ -409,9 +485,9 @@ extension VMDisplayQemuMetalWindowController {
         debounceResize = nil
         _ = updateGuestResolution(for: window, frameSize: window.frame.size)
         cancelResize?.cancel()
-        cancelResize = DispatchWorkItem {
-            if let vmDisplay = self.vmDisplay {
-                self.displaySizeDidChange(size: vmDisplay.displaySize)
+        cancelResize = DispatchWorkItem { [weak self] in
+            if let vmDisplay = self?.vmDisplay {
+                self?.displaySizeDidChange(size: vmDisplay.displaySize)
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + resizeTimeoutSecs, execute: cancelResize!)
@@ -449,6 +525,13 @@ extension VMDisplayQemuMetalWindowController {
     override func windowDidBecomeKey(_ notification: Notification) {
         if isFullScreen && isFullScreenAutoCapture {
             captureMouse()
+        } else {
+            // Re-assert first responder every time the window regains key focus
+            // so keyboard events reach the guest even after switching apps.
+            let ok = window?.makeFirstResponder(metalView) ?? false
+            #if DEBUG
+            NSLog("UTM-KB: windowDidBecomeKey makeFirstResponder=%d metalViewHidden=%d", ok ? 1 : 0, metalView.isHidden ? 1 : 0)
+            #endif
         }
         super.windowDidBecomeKey(notification)
     }
@@ -537,6 +620,8 @@ extension VMDisplayQemuMetalWindowController: VMMetalViewInputDelegate {
         metalView?.releaseMouse()
         self.captureMouseToolbarButton.state = .off
         self.window?.subtitle = defaultSubtitle
+        // Restore first responder so keyboard continues to work after release.
+        window?.makeFirstResponder(metalView)
     }
     
     func mouseMove(absolutePoint: CGPoint, buttonMask: CSInputButton) {
@@ -592,10 +677,16 @@ extension VMDisplayQemuMetalWindowController: VMMetalViewInputDelegate {
     
     private func sendExtendedKey(_ button: CSInputKey, keyCode: Int) {
         if (keyCode & 0xFF00) == 0xE000 {
+            #if DEBUG
+            NSLog("UTM-KB: sendExtendedKey extended button=%@ code=0x%x vmInput=%@", "\(button)", 0x100 | (keyCode & 0xFF), vmInput == nil ? "nil" : "set")
+            #endif
             vmInput?.send(button, code: Int32(0x100 | (keyCode & 0xFF)))
         } else if keyCode >= 0x100 {
             logger.warning("ignored invalid keycode \(keyCode)");
         } else {
+            #if DEBUG
+            NSLog("UTM-KB: sendExtendedKey button=%@ code=0x%x vmInput=%@", "\(button)", keyCode, vmInput == nil ? "nil" : "set")
+            #endif
             vmInput?.send(button, code: Int32(keyCode))
         }
     }
@@ -681,6 +772,57 @@ extension VMDisplayQemuMetalWindowController: VMMetalViewInputDelegate {
         if !vmInput.keyLock.contains(.num) {
             vmInput.keyLock.insert(.num)
         }
+    }
+}
+
+// MARK: - Drag and drop
+extension VMDisplayQemuMetalWindowController: VMMetalViewDragDelegate {
+    private static let diskImageExtensions: Set<String> = [
+        "iso", "img", "qcow2", "qcow", "raw", "vmdk", "vhd", "vhdx", "vdi"
+    ]
+
+    func metalView(_ view: VMMetalView, didDropFiles urls: [URL]) -> Bool {
+        let diskURLs = urls.filter {
+            Self.diskImageExtensions.contains($0.pathExtension.lowercased())
+        }
+        guard !diskURLs.isEmpty else {
+            showErrorAlert(NSLocalizedString("Only disk image files can be dropped onto the display. Supported formats: ISO, IMG, QCOW2, VMDK, VHD, VHDX, VDI, RAW.", comment: "VMDisplayQemuMetalWindowController"))
+            return false
+        }
+        guard vmQemuConfig?.drives.contains(where: { $0.isExternal }) == true else {
+            showErrorAlert(NSLocalizedString("This virtual machine has no removable drives. Add an external drive in the VM configuration to use drag and drop.", comment: "VMDisplayQemuMetalWindowController"))
+            return false
+        }
+        // Mount each dropped image into the first available (empty) external drive slot.
+        // All drive config access goes through @MainActor methods to avoid Sendable issues.
+        withErrorAlert {
+            var remaining = diskURLs
+            let externalDrives = await self.vmQemuConfig?.drives.filter { $0.isExternal } ?? []
+            for drive in externalDrives {
+                guard !remaining.isEmpty else { break }
+                let currentURL = await self.qemuVM.externalImageURL(for: drive)
+                guard currentURL == nil else { continue }
+                let url = remaining.removeFirst()
+                try await self.qemuVM.changeMedium(drive, to: url)
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    self.window?.subtitle = String.localizedStringWithFormat(
+                        NSLocalizedString("Mounted: %@", comment: "VMDisplayQemuMetalWindowController"),
+                        url.lastPathComponent)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                        self?.window?.subtitle = self?.defaultSubtitle ?? ""
+                    }
+                }
+            }
+            if !remaining.isEmpty {
+                await MainActor.run { [weak self] in
+                    self?.showErrorAlert(String.localizedStringWithFormat(
+                        NSLocalizedString("%lld file(s) could not be mounted because there are no free removable drive slots.", comment: "VMDisplayQemuMetalWindowController"),
+                        remaining.count))
+                }
+            }
+        }
+        return true
     }
 }
 
